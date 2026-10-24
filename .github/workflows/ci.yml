@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  # Pinned sqlc release; bump deliberately and regenerate.
+  SQLC_VERSION: v1.31.1
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - run: go vet ./...
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
+      - run: go test ./...
+
+  sqlc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check for sqlc config
+        id: config
+        run: |
+          if [ -f sqlc.yaml ]; then echo "present=true" >> "$GITHUB_OUTPUT"; fi
+      - if: steps.config.outputs.present == 'true'
+        uses: sqlc-dev/setup-sqlc@v5
+        with:
+          sqlc-version: ${{ env.SQLC_VERSION }}
+      - name: Generated code is up to date
+        if: steps.config.outputs.present == 'true'
+        run: |
+          make generate
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Generated code is out of date; run make generate and commit the result:"
+            git status --porcelain
+            git diff
+            exit 1
+          fi
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check for web app
+        id: web
+        run: |
+          if [ -f web/package.json ]; then echo "present=true" >> "$GITHUB_OUTPUT"; fi
+      - if: steps.web.outputs.present == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - if: steps.web.outputs.present == 'true'
+        working-directory: web
+        run: |
+          npm ci
+          npm run lint
+          npm run check
+          npm test
+          npm run build
+
+  cross-compile:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go build ./...
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
