@@ -1,4 +1,5 @@
 import { api as defaultApi, type Api } from './client.js';
+import { tankPath } from './tank-id.js';
 
 export const tankTypes = ['reef', 'fowlr', 'frag', 'quarantine', 'other'] as const;
 export type TankType = (typeof tankTypes)[number];
@@ -41,16 +42,22 @@ export interface TankChanges {
 
 export function createTanksApi(api: Api) {
   return {
-    list: (includeArchived = false) =>
-      api.get<Tank[]>('/tanks', { query: { include_archived: includeArchived || undefined } }),
-    get: (id: number | string) => api.get<Tank>(`/tanks/${encodeURIComponent(String(id))}`),
-    create: (tank: NewTank) => api.post<Tank>('/tanks', tank),
-    update: (id: number, changes: TankChanges) => api.patch<Tank>(`/tanks/${id}`, changes),
-    archive: (id: number) => api.post<Tank>(`/tanks/${id}/archive`),
-    unarchive: (id: number) => api.post<Tank>(`/tanks/${id}/unarchive`),
+    list: (includeArchived = false, signal?: AbortSignal) =>
+      api.get<Tank[]>('/tanks', {
+        signal,
+        query: { include_archived: includeArchived || undefined }
+      }),
+    get: (id: number, signal?: AbortSignal) => api.get<Tank>(tankPath(id), { signal }),
+    create: (tank: NewTank, signal?: AbortSignal) => api.post<Tank>('/tanks', tank, { signal }),
+    update: (id: number, changes: TankChanges, signal?: AbortSignal) =>
+      api.patch<Tank>(tankPath(id), changes, { signal }),
+    archive: (id: number, signal?: AbortSignal) =>
+      api.post<Tank>(tankPath(id, 'archive'), undefined, { signal }),
+    unarchive: (id: number, signal?: AbortSignal) =>
+      api.post<Tank>(tankPath(id, 'unarchive'), undefined, { signal }),
     /** Administrators only; confirm must be the tank's exact name. */
-    remove: (id: number, confirm: string) =>
-      api.del<void>(`/tanks/${id}`, undefined, { query: { confirm } })
+    remove: (id: number, confirm: string, signal?: AbortSignal) =>
+      api.del<void>(tankPath(id), undefined, { signal, query: { confirm } })
   };
 }
 

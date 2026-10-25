@@ -1,4 +1,5 @@
 import { api as defaultApi, type Api } from './client.js';
+import { tankPath } from './tank-id.js';
 
 /** One reading of the series endpoint; the value is in display units. */
 export interface SeriesPoint {
@@ -20,28 +21,14 @@ export interface Series {
   points: SeriesPoint[];
 }
 
-export interface ChartsApi {
-  /** Readings oldest first; from is inclusive and null means the whole history. */
-  series(
-    tankId: string,
-    parameterId: string,
-    from: Date | null,
-    signal?: AbortSignal
-  ): Promise<Series>;
-}
-
-export function createChartsApi(api: Api): ChartsApi {
-  const tank = (tankId: string) => `/tanks/${encodeURIComponent(tankId)}`;
+export function createChartsApi(api: Api) {
   return {
-    series(tankId, parameterId, from, signal) {
-      return api.get<Series>(
-        `${tank(tankId)}/parameters/${encodeURIComponent(parameterId)}/series`,
-        {
-          signal,
-          query: { from: from?.toISOString() }
-        }
-      );
-    }
+    /** Readings oldest first; from is inclusive and null means the whole history. */
+    series: (tankId: number, parameterId: string, from: Date | null, signal?: AbortSignal) =>
+      api.get<Series>(tankPath(tankId, 'parameters', parameterId, 'series'), {
+        signal,
+        query: { from: from?.toISOString() }
+      })
   };
 }
 

@@ -1,33 +1,26 @@
-import { describe, expect, it, vi } from 'vitest';
-import type { Api } from './client.js';
+import { describe, expect, it } from 'vitest';
+import { fakeApi } from '#lib/test/fakeApi.js';
 import { createDashboardApi } from './dashboard.js';
 
-function fakeApi() {
-  const calls: { method: string; path: string; body?: unknown }[] = [];
-  const reply = { cards: [] };
-  const record = (method: string) =>
-    vi.fn(async (path: string, ...rest: unknown[]) => {
-      calls.push({ method, path, body: method === 'GET' ? undefined : rest[0] });
-      return reply;
-    });
-  const api = { get: record('GET'), put: record('PUT'), post: record('POST') } as unknown as Api;
-  return { api, calls };
-}
+const reply = { cards: [] };
 
 describe('dashboardApi', () => {
   it('reads and resets the layout of one tank', async () => {
-    const { api, calls } = fakeApi();
+    const { api, calls } = fakeApi({
+      'GET /tanks/3/dashboard': reply,
+      'POST /tanks/3/dashboard/reset': reply
+    });
     const dashboard = createDashboardApi(api);
-    await dashboard.get('3');
-    await dashboard.reset('3');
-    expect(calls).toEqual([
+    await dashboard.get(3);
+    await dashboard.reset(3);
+    expect(calls).toMatchObject([
       { method: 'GET', path: '/tanks/3/dashboard', body: undefined },
       { method: 'POST', path: '/tanks/3/dashboard/reset', body: undefined }
     ]);
   });
 
-  it('puts the whole body and escapes the tank id', async () => {
-    const { api, calls } = fakeApi();
+  it('puts the whole body', async () => {
+    const { api, calls } = fakeApi({ 'PUT /tanks/3/dashboard': reply });
     const body = {
       cards: [
         {
@@ -39,7 +32,7 @@ describe('dashboardApi', () => {
         }
       ]
     };
-    await createDashboardApi(api).save('a/b', body);
-    expect(calls).toEqual([{ method: 'PUT', path: '/tanks/a%2Fb/dashboard', body }]);
+    await createDashboardApi(api).save(3, body);
+    expect(calls).toMatchObject([{ method: 'PUT', path: '/tanks/3/dashboard', body }]);
   });
 });

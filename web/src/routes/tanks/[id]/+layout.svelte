@@ -1,20 +1,18 @@
 <script lang="ts">
-  import { page } from '$app/state';
   import { isApiError } from '#lib/api/client.js';
   import { tanksApi, type Tank } from '#lib/api/tanks.js';
   import { currentTank } from '#lib/tank/current-tank.svelte.js';
   import { provideOpenTank } from '#lib/tank/open-tank.js';
 
-  let { children } = $props();
+  let { data, children } = $props();
 
   let tank = $state.raw<Tank | null>(null);
   provideOpenTank(() => tank);
 
   // Opening a tank's page makes it the current tank, and a tank that no longer exists is forgotten.
   $effect(() => {
-    const id = page.params.id;
+    const id = data.tankId;
     tank = null;
-    if (!id || !/^\d+$/.test(id)) return;
     let stale = false;
     tanksApi
       .get(id)

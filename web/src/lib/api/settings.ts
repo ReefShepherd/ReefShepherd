@@ -1,4 +1,4 @@
-import { api } from './client.js';
+import { api as defaultApi, type Api } from './client.js';
 
 export interface InstanceSettings {
   instance_name: string;
@@ -32,8 +32,13 @@ export interface SettingsPatch {
   password?: string;
 }
 
-export const settingsApi = {
-  get: () => api.get<InstanceSettings>('/settings'),
-  update: (patch: SettingsPatch) => api.patch<InstanceSettings>('/settings', patch),
-  units: () => api.get<UnitFamily[]>('/units')
-};
+export function createSettingsApi(api: Api) {
+  return {
+    get: (signal?: AbortSignal) => api.get<InstanceSettings>('/settings', { signal }),
+    update: (patch: SettingsPatch, signal?: AbortSignal) =>
+      api.patch<InstanceSettings>('/settings', patch, { signal }),
+    units: (signal?: AbortSignal) => api.get<UnitFamily[]>('/units', { signal })
+  };
+}
+
+export const settingsApi = createSettingsApi(defaultApi);

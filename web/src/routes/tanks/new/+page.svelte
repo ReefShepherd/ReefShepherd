@@ -29,9 +29,9 @@
   });
 
   async function saved(tank: Tank) {
-    currentTank.set(String(tank.id));
+    currentTank.set(tank.id);
     await tankList.refresh().catch(() => {});
-    currentTank.set(String(tank.id));
+    currentTank.set(tank.id);
     await goto('/');
   }
 </script>

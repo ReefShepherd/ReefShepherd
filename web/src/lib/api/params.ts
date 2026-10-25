@@ -1,5 +1,6 @@
 import type { Schedule } from '#lib/schedule/schedule.js';
 import { api as defaultApi, type Api } from './client.js';
+import { tankPath } from './tank-id.js';
 
 export interface ParameterDefinition {
   id: number;
@@ -120,38 +121,43 @@ export interface ResultChanges {
 }
 
 export function createParamsApi(api: Api) {
-  const tank = (tankId: number | string) => `/tanks/${encodeURIComponent(String(tankId))}`;
   return {
-    definitions: (includeArchived = false) =>
+    definitions: (includeArchived = false, signal?: AbortSignal) =>
       api
         .get<{
           parameters: ParameterDefinition[];
-        }>('/parameters', { query: { include_archived: includeArchived || undefined } })
+        }>('/parameters', { signal, query: { include_archived: includeArchived || undefined } })
         .then((r) => r.parameters),
-    createDefinition: (parameter: NewParameter) =>
-      api.post<ParameterDefinition>('/parameters', parameter),
-    updateDefinition: (id: number, changes: ParameterChanges) =>
-      api.patch<ParameterDefinition>(`/parameters/${id}`, changes),
-    archiveDefinition: (id: number) => api.post<ParameterDefinition>(`/parameters/${id}/archive`),
-    unarchiveDefinition: (id: number) =>
-      api.post<ParameterDefinition>(`/parameters/${id}/unarchive`),
-    removeDefinition: (id: number) => api.del<void>(`/parameters/${id}`),
+    createDefinition: (parameter: NewParameter, signal?: AbortSignal) =>
+      api.post<ParameterDefinition>('/parameters', parameter, { signal }),
+    updateDefinition: (id: number, changes: ParameterChanges, signal?: AbortSignal) =>
+      api.patch<ParameterDefinition>(`/parameters/${id}`, changes, { signal }),
+    archiveDefinition: (id: number, signal?: AbortSignal) =>
+      api.post<ParameterDefinition>(`/parameters/${id}/archive`, undefined, { signal }),
+    unarchiveDefinition: (id: number, signal?: AbortSignal) =>
+      api.post<ParameterDefinition>(`/parameters/${id}/unarchive`, undefined, { signal }),
+    removeDefinition: (id: number, signal?: AbortSignal) =>
+      api.del<void>(`/parameters/${id}`, undefined, { signal }),
 
-    tankParameters: (tankId: number | string, signal?: AbortSignal) =>
-      api.get<TankParameters>(`${tank(tankId)}/parameters`, { signal }),
+    tankParameters: (tankId: number, signal?: AbortSignal) =>
+      api.get<TankParameters>(tankPath(tankId, 'parameters'), { signal }),
     saveTankParameter: (
-      tankId: number | string,
+      tankId: number,
       parameterId: number,
-      changes: TankParameterChanges
-    ) => api.put<TankParameter>(`${tank(tankId)}/parameters/${parameterId}`, changes),
+      changes: TankParameterChanges,
+      signal?: AbortSignal
+    ) => api.put<TankParameter>(tankPath(tankId, 'parameters', parameterId), changes, { signal }),
 
-    createResults: (tankId: number | string, entry: NewResults) =>
-      api.post<{ results: TestResult[] }>(`${tank(tankId)}/results`, entry).then((r) => r.results),
-    results: (tankId: number | string, query: ResultQuery = {}) =>
-      api.get<ResultPage>(`${tank(tankId)}/results`, { query: { ...query } }),
-    updateResult: (id: number, changes: ResultChanges) =>
-      api.patch<TestResult>(`/results/${id}`, changes),
-    removeResult: (id: number) => api.del<void>(`/results/${id}`)
+    createResults: (tankId: number, entry: NewResults, signal?: AbortSignal) =>
+      api
+        .post<{ results: TestResult[] }>(tankPath(tankId, 'results'), entry, { signal })
+        .then((r) => r.results),
+    results: (tankId: number, query: ResultQuery = {}, signal?: AbortSignal) =>
+      api.get<ResultPage>(tankPath(tankId, 'results'), { signal, query: { ...query } }),
+    updateResult: (id: number, changes: ResultChanges, signal?: AbortSignal) =>
+      api.patch<TestResult>(`/results/${id}`, changes, { signal }),
+    removeResult: (id: number, signal?: AbortSignal) =>
+      api.del<void>(`/results/${id}`, undefined, { signal })
   };
 }
 

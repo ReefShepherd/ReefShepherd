@@ -12,7 +12,7 @@
   import { chart } from './uplot.js';
 
   interface Props {
-    tankId: string;
+    tankId: number;
     parameterId: string;
     range?: RangeId;
     /** Called with the parameter's name once its readings have loaded. */

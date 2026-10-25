@@ -1,4 +1,5 @@
 import { api as defaultApi, type Api } from './client.js';
+import { tankPath } from './tank-id.js';
 
 export type CardSize = 'normal' | 'wide';
 
@@ -29,21 +30,17 @@ export interface Layout {
   cards: DashboardCard[];
 }
 
-export interface DashboardApi {
-  /** The signed-in user's cards for the tank, or the default cards on the first read. */
-  get(tankId: string, signal?: AbortSignal): Promise<Layout>;
-  /** Replaces the whole layout; the list must hold at least one card. */
-  save(tankId: string, body: DashboardBody): Promise<Layout>;
-  /** Discards the layout and returns the default one. */
-  reset(tankId: string): Promise<Layout>;
-}
-
-export function createDashboardApi(api: Api): DashboardApi {
-  const path = (tankId: string) => `/tanks/${encodeURIComponent(tankId)}/dashboard`;
+export function createDashboardApi(api: Api) {
   return {
-    get: (tankId, signal) => api.get<Layout>(path(tankId), { signal }),
-    save: (tankId, body) => api.put<Layout>(path(tankId), body),
-    reset: (tankId) => api.post<Layout>(`${path(tankId)}/reset`)
+    /** The signed-in user's cards for the tank, or the default cards on the first read. */
+    get: (tankId: number, signal?: AbortSignal) =>
+      api.get<Layout>(tankPath(tankId, 'dashboard'), { signal }),
+    /** Replaces the whole layout; the list must hold at least one card. */
+    save: (tankId: number, body: DashboardBody, signal?: AbortSignal) =>
+      api.put<Layout>(tankPath(tankId, 'dashboard'), body, { signal }),
+    /** Discards the layout and returns the default one. */
+    reset: (tankId: number, signal?: AbortSignal) =>
+      api.post<Layout>(tankPath(tankId, 'dashboard', 'reset'), undefined, { signal })
   };
 }
 

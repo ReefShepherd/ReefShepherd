@@ -48,7 +48,7 @@ describe('tankList', () => {
     list.mockResolvedValue([tank(2), tank(3)]);
     const { currentTank, tankList } = await load('7');
     await tankList.load();
-    expect(currentTank.id).toBe('2');
+    expect(currentTank.id).toBe(2);
   });
 
   it('clears the current tank when no active tank is left', async () => {
@@ -63,7 +63,7 @@ describe('tankList', () => {
     list.mockResolvedValue([tank(1), tank(2)]);
     const { currentTank, tankList } = await load('2');
     await tankList.load();
-    expect(currentTank.id).toBe('2');
+    expect(currentTank.id).toBe(2);
   });
 
   it('waits for the user before choosing, so the default tank wins over the first one', async () => {
@@ -83,7 +83,7 @@ describe('tankList', () => {
     expect(currentTank.id).toBeNull();
     arrive();
     await loading;
-    expect(currentTank.id).toBe('3');
+    expect(currentTank.id).toBe(3);
   });
 
   it('still lists the tanks when the user cannot be read', async () => {
@@ -92,7 +92,7 @@ describe('tankList', () => {
     const { currentTank, tankList } = await load(null);
     await tankList.load();
     expect(tankList.active.map((t) => t.id)).toEqual([2, 3]);
-    expect(currentTank.id).toBe('2');
+    expect(currentTank.id).toBe(2);
   });
 
   it('shares one read between callers made while it is under way', async () => {

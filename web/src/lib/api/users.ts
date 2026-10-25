@@ -1,4 +1,4 @@
-import { api } from './client.js';
+import { api as defaultApi, type Api } from './client.js';
 
 export type Role = 'admin' | 'member';
 
@@ -58,14 +58,24 @@ export interface UserChanges {
   password?: string;
 }
 
-export const usersApi = {
-  setup: (request: SetupRequest) => api.post<Me>('/setup', request),
-  me: () => api.get<Me>('/me'),
-  updateMe: (changes: { theme?: string; display_name?: string; email?: string | null }) =>
-    api.patch<Me>('/me', changes),
-  list: () => api.get<User[]>('/users'),
-  create: (user: NewUser) => api.post<User>('/users', user),
-  update: (id: number, changes: UserChanges) => api.patch<User>(`/users/${id}`, changes),
-  remove: (id: number) => api.del<void>(`/users/${id}`),
-  resetMfa: (id: number) => api.post<void>(`/users/${id}/reset-mfa`)
-};
+export function createUsersApi(api: Api) {
+  return {
+    setup: (request: SetupRequest, signal?: AbortSignal) =>
+      api.post<Me>('/setup', request, { signal }),
+    me: (signal?: AbortSignal) => api.get<Me>('/me', { signal }),
+    updateMe: (
+      changes: { theme?: string; display_name?: string; email?: string | null },
+      signal?: AbortSignal
+    ) => api.patch<Me>('/me', changes, { signal }),
+    list: (signal?: AbortSignal) => api.get<User[]>('/users', { signal }),
+    create: (user: NewUser, signal?: AbortSignal) => api.post<User>('/users', user, { signal }),
+    update: (id: number, changes: UserChanges, signal?: AbortSignal) =>
+      api.patch<User>(`/users/${id}`, changes, { signal }),
+    remove: (id: number, signal?: AbortSignal) =>
+      api.del<void>(`/users/${id}`, undefined, { signal }),
+    resetMfa: (id: number, signal?: AbortSignal) =>
+      api.post<void>(`/users/${id}/reset-mfa`, undefined, { signal })
+  };
+}
+
+export const usersApi = createUsersApi(defaultApi);

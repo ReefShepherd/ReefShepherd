@@ -9,6 +9,7 @@
 
 <script lang="ts">
   import { chartsApi } from '#lib/api/charts.js';
+  import { tankPath } from '#lib/api/tank-id.js';
   import { sparkPoints } from '#lib/components/charts/data.js';
   import { rangeStart } from '#lib/components/charts/range.js';
   import Sparkline from '#lib/components/charts/Sparkline.svelte';
@@ -57,7 +58,7 @@
   <div class="param">
     <div class="head">
       <h3>
-        <a href="/tanks/{encodeURIComponent(dash.tankId)}/charts/{parameter.parameter_id}">
+        <a href={tankPath(dash.tankId, 'charts', parameter.parameter_id)}>
           {parameter.name}
         </a>
       </h3>

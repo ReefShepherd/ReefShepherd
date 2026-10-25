@@ -1,6 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { page } from '$app/state';
+  import type { PageProps } from './$types';
   import { errorText } from '#lib/api/error-text.js';
   import { tanksApi, type Tank } from '#lib/api/tanks.js';
   import Alert from '#lib/components/forms/Alert.svelte';
@@ -15,7 +15,8 @@
   import { tankList } from '#lib/tank/tanks.svelte.js';
   import { unitCatalog } from '#lib/units/cache.svelte.js';
 
-  const id = $derived(page.params.id ?? '');
+  let { data }: PageProps = $props();
+  const id = $derived(data.tankId);
 
   let tank = $state<Tank | null>(null);
   let failure = $state('');

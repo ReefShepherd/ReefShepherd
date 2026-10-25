@@ -1,4 +1,4 @@
-import { api } from './client.js';
+import { api as defaultApi, type Api } from './client.js';
 
 /** What the sign-in page needs to know before anyone is signed in. */
 export interface AuthConfig {
@@ -37,27 +37,36 @@ export interface TotpProof {
   code?: string;
 }
 
-export const authApi = {
-  config: () => api.get<AuthConfig>('/auth/config'),
-  login: (username: string, password: string) =>
-    api.post<{ mfa_required: boolean }>('/auth/login', { username, password }),
-  verifyCode: (code: string) => api.post<void>('/auth/mfa', { code }),
-  verifyRecoveryCode: (recoveryCode: string) =>
-    api.post<void>('/auth/mfa', { recovery_code: recoveryCode }),
-  logout: () => api.post<void>('/auth/logout'),
+export function createAuthApi(api: Api) {
+  return {
+    config: (signal?: AbortSignal) => api.get<AuthConfig>('/auth/config', { signal }),
+    login: (username: string, password: string, signal?: AbortSignal) =>
+      api.post<{ mfa_required: boolean }>('/auth/login', { username, password }, { signal }),
+    verifyCode: (code: string, signal?: AbortSignal) =>
+      api.post<void>('/auth/mfa', { code }, { signal }),
+    verifyRecoveryCode: (recoveryCode: string, signal?: AbortSignal) =>
+      api.post<void>('/auth/mfa', { recovery_code: recoveryCode }, { signal }),
+    logout: (signal?: AbortSignal) => api.post<void>('/auth/logout', undefined, { signal }),
 
-  /** currentPassword is left out by an account that has no password yet. */
-  changePassword: (newPassword: string, currentPassword?: string) =>
-    api.post<void>('/me/password', {
-      current_password: currentPassword,
-      new_password: newPassword
-    }),
-  beginTotp: () => api.post<TotpEnrollment>('/me/totp/enroll'),
-  confirmTotp: (code: string) =>
-    api.post<{ recovery_codes: string[] }>('/me/totp/confirm', { code }),
-  /** Cancelling an enrolment that was never confirmed needs no proof. */
-  disableTotp: (proof?: TotpProof) => api.del<void>('/me/totp', proof),
+    /** currentPassword is left out by an account that has no password yet. */
+    changePassword: (newPassword: string, currentPassword?: string, signal?: AbortSignal) =>
+      api.post<void>(
+        '/me/password',
+        { current_password: currentPassword, new_password: newPassword },
+        { signal }
+      ),
+    beginTotp: (signal?: AbortSignal) =>
+      api.post<TotpEnrollment>('/me/totp/enroll', undefined, { signal }),
+    confirmTotp: (code: string, signal?: AbortSignal) =>
+      api.post<{ recovery_codes: string[] }>('/me/totp/confirm', { code }, { signal }),
+    /** Cancelling an enrolment that was never confirmed needs no proof. */
+    disableTotp: (proof?: TotpProof, signal?: AbortSignal) =>
+      api.del<void>('/me/totp', proof, { signal }),
 
-  sessions: () => api.get<Session[]>('/me/sessions'),
-  revokeSession: (id: number) => api.del<void>(`/me/sessions/${id}`)
-};
+    sessions: (signal?: AbortSignal) => api.get<Session[]>('/me/sessions', { signal }),
+    revokeSession: (id: number, signal?: AbortSignal) =>
+      api.del<void>(`/me/sessions/${id}`, undefined, { signal })
+  };
+}
+
+export const authApi = createAuthApi(defaultApi);

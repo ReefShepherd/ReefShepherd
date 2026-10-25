@@ -19,11 +19,11 @@ describe('currentTank', () => {
     stubStorage({ getItem });
     const { currentTank } = await load();
     expect(getItem).toHaveBeenCalledWith('current_tank');
-    expect(currentTank.id).toBe('7');
+    expect(currentTank.id).toBe(7);
   });
 
   it('starts empty when nothing is saved or the saved value is not a plain id', async () => {
-    for (const stored of [null, '', '../admin', '3/tests', 'a b']) {
+    for (const stored of [null, '', '../admin', '3/tests', 'a b', 'abc', '0', '-2', '1.5']) {
       stubStorage({ getItem: () => stored });
       const { currentTank } = await load();
       expect(currentTank.id, String(stored)).toBeNull();
@@ -45,8 +45,8 @@ describe('currentTank', () => {
     const removeItem = vi.fn();
     stubStorage({ getItem: () => null, setItem, removeItem });
     const { currentTank } = await load();
-    currentTank.set('4');
-    expect(currentTank.id).toBe('4');
+    currentTank.set(4);
+    expect(currentTank.id).toBe(4);
     expect(setItem).toHaveBeenCalledExactlyOnceWith('current_tank', '4');
     currentTank.set(null);
     expect(currentTank.id).toBeNull();
@@ -59,8 +59,8 @@ describe('currentTank', () => {
     };
     stubStorage({ getItem: () => null, setItem: fail, removeItem: fail });
     const { currentTank } = await load();
-    expect(() => currentTank.set('2')).not.toThrow();
-    expect(currentTank.id).toBe('2');
+    expect(() => currentTank.set(2)).not.toThrow();
+    expect(currentTank.id).toBe(2);
     expect(() => currentTank.set(null)).not.toThrow();
     expect(currentTank.id).toBeNull();
   });

@@ -1,3 +1,4 @@
+import { tankPath } from '#lib/api/tank-id.js';
 import { m } from '#lib/paraglide/messages.js';
 import { pathMatches } from '#lib/path.js';
 
@@ -16,8 +17,7 @@ const testsPage = tankSection('tests');
 const chartsPage = tankSection('charts');
 
 /** The entries of the main navigation; tankId is the tank the tank-scoped entries open. */
-export function navEntries(tankId: string | null): NavEntry[] {
-  const tankBase = tankId === null ? '/tanks' : `/tanks/${encodeURIComponent(tankId)}`;
+export function navEntries(tankId: number | null): NavEntry[] {
   return [
     {
       icon: 'dashboard',
@@ -33,13 +33,13 @@ export function navEntries(tankId: string | null): NavEntry[] {
     },
     {
       icon: 'tests',
-      href: tankId === null ? tankBase : `${tankBase}/tests`,
+      href: tankId === null ? '/tanks' : tankPath(tankId, 'tests'),
       label: m.nav_tests,
       isActive: (p) => testsPage.test(p)
     },
     {
       icon: 'charts',
-      href: tankId === null ? tankBase : `${tankBase}/charts`,
+      href: tankId === null ? '/tanks' : tankPath(tankId, 'charts'),
       label: m.nav_charts,
       isActive: (p) => chartsPage.test(p)
     },

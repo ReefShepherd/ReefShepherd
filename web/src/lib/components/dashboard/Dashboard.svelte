@@ -10,7 +10,7 @@
   import { provideDashboard } from './context.js';
   import './grid.css';
 
-  let { tankId }: { tankId: string } = $props();
+  let { tankId }: { tankId: number } = $props();
 
   let saved = $state.raw<Card[]>([]);
   let parameters = $state.raw<TankParameter[]>([]);
