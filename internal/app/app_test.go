@@ -10,14 +10,44 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/reefshepherd/reefshepherd/internal/config"
+	"github.com/reefshepherd/reefshepherd/internal/db"
+	"github.com/reefshepherd/reefshepherd/internal/settings"
+	"github.com/reefshepherd/reefshepherd/internal/webui"
 )
+
+func testLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func openTestDB(t *testing.T) *db.DB {
+	t.Helper()
+	database, err := openDatabase(t.Context(), t.TempDir(), testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	return database
+}
 
 func newTestApp(t *testing.T, cfg config.Config) *App {
 	t.Helper()
-	a, err := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	database := openTestDB(t)
+	a, err := New(cfg, testLogger(), database, settings.NewStore(database))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+// newTestAppWithUI builds an app whose non-API paths are served by ui.
+func newTestAppWithUI(t *testing.T, ui http.Handler) *App {
+	t.Helper()
+	database := openTestDB(t)
+	a, err := newWithUI(config.Config{}, testLogger(), database, settings.NewStore(database), ui)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,8 +137,62 @@ func TestCrossOriginProtectionInFullStack(t *testing.T) {
 }
 
 func TestNewRejectsBadTrustedOrigin(t *testing.T) {
-	if _, err := New(config.Config{TrustedOrigins: []string{"nope"}}, slog.New(slog.NewTextHandler(io.Discard, nil))); err == nil {
+	database := openTestDB(t)
+	if _, err := New(config.Config{TrustedOrigins: []string{"nope"}}, testLogger(), database, settings.NewStore(database)); err == nil {
 		t.Error("expected error")
+	}
+}
+
+func TestNewRequiresDatabaseAndSettings(t *testing.T) {
+	database := openTestDB(t)
+	if _, err := New(config.Config{}, testLogger(), nil, settings.NewStore(database)); err == nil {
+		t.Error("expected an error without a database")
+	}
+	if _, err := New(config.Config{}, testLogger(), database, nil); err == nil {
+		t.Error("expected an error without a settings store")
+	}
+}
+
+const shellCSP = "default-src 'none'; script-src 'self' 'sha256-abc='; style-src 'self'"
+
+func builtShell() fstest.MapFS {
+	return fstest.MapFS{
+		"200.html": {Data: []byte(`<html><head><meta http-equiv="content-security-policy" content="` + shellCSP + `"></head></html>`)},
+	}
+}
+
+func TestSecurityHeadersKeepTheShellPolicy(t *testing.T) {
+	a := newTestAppWithUI(t, webui.NewHandler(builtShell()))
+
+	for _, target := range []string{"/", "/tanks/3/charts/5"} {
+		got := do(a, http.MethodGet, target, "", nil).Header().Get("Content-Security-Policy")
+		if want := shellCSP + "; frame-ancestors 'none'"; got != want {
+			t.Errorf("%s: csp = %q, want %q", target, got, want)
+		}
+	}
+	// Other headers still come from the middleware on the same response.
+	if got := do(a, http.MethodGet, "/", "", nil).Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("nosniff = %q", got)
+	}
+}
+
+func TestAPIAndHealthKeepTheDefaultPolicy(t *testing.T) {
+	a := newTestAppWithUI(t, webui.NewHandler(builtShell()))
+
+	for _, target := range []string{"/healthz", "/api/v1/nothing"} {
+		got := do(a, http.MethodGet, target, "", nil).Header().Get("Content-Security-Policy")
+		if got != contentSecurityPolicy {
+			t.Errorf("%s: csp = %q, want the default", target, got)
+		}
+	}
+}
+
+func TestPlaceholderKeepsItsOwnPolicy(t *testing.T) {
+	a := newTestAppWithUI(t, webui.NewHandler(fstest.MapFS{".gitkeep": {}}))
+
+	got := do(a, http.MethodGet, "/", "", nil).Header().Get("Content-Security-Policy")
+	if !strings.Contains(got, "style-src 'unsafe-inline'") || got == contentSecurityPolicy {
+		t.Errorf("placeholder csp = %q", got)
 	}
 }
 

@@ -15,13 +15,15 @@ import (
 	"github.com/reefshepherd/reefshepherd/internal/config"
 	"github.com/reefshepherd/reefshepherd/internal/db"
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
+	"github.com/reefshepherd/reefshepherd/internal/settings"
 	"github.com/reefshepherd/reefshepherd/internal/version"
+	"github.com/reefshepherd/reefshepherd/internal/webui"
 )
 
 const (
 	// maxBodyBytes is the default request body limit; routes that take uploads need a different one.
 	maxBodyBytes = 1 << 20
-	// contentSecurityPolicy allows only same-origin resources and no framing.
+	// contentSecurityPolicy is the default policy; the web UI handler replaces it on the pages it serves.
 	contentSecurityPolicy = "default-src 'self'; img-src 'self' data: blob:; object-src 'none'; " +
 		"base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 
@@ -42,15 +44,23 @@ type App struct {
 	handler http.Handler
 }
 
-// New builds the route table and wraps it in the middleware stack.
-func New(cfg config.Config, logger *slog.Logger) (*App, error) {
+// New builds the route table, serving the embedded web UI, and wraps it in the middleware stack.
+func New(cfg config.Config, logger *slog.Logger, database *db.DB, store *settings.Store) (*App, error) {
+	return newWithUI(cfg, logger, database, store, webui.Handler())
+}
+
+// newWithUI is New with the handler for non-API paths supplied by the caller.
+func newWithUI(cfg config.Config, logger *slog.Logger, database *db.DB, store *settings.Store, ui http.Handler) (*App, error) {
+	if database == nil || store == nil {
+		return nil, errors.New("database and settings store are required")
+	}
 	crossOrigin, err := httpx.CrossOrigin(cfg.TrustedOrigins)
 	if err != nil {
 		return nil, fmt.Errorf("build cross-origin protection: %w", err)
 	}
 
 	mux := http.NewServeMux()
-	registerRoutes(mux)
+	registerRoutes(mux, database, store, ui)
 
 	handler := httpx.Chain(mux,
 		httpx.RequestLog(logger),
@@ -81,7 +91,7 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 			logger.Warn("close database", slog.Any("error", err))
 		}
 	}()
-	a, err := New(cfg, logger)
+	a, err := New(cfg, logger, database, settings.NewStore(database))
 	if err != nil {
 		return err
 	}
