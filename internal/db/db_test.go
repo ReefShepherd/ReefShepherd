@@ -130,23 +130,24 @@ func TestMigrateSeedsParameterPresets(t *testing.T) {
 		key, name, family, label string
 		low, high                *float64
 		interval                 int
+		decimals                 int
 	}
 	f := func(v float64) *float64 { return &v }
 	want := []preset{
-		{"temperature", "Temperature", "temperature", "", f(25.0), f(26.5), 7},
-		{"salinity", "Salinity", "salinity", "", f(34.0), f(35.5), 7},
-		{"ph", "pH", "fixed", "", f(7.9), f(8.4), 7},
-		{"alkalinity", "Alkalinity", "alkalinity", "", f(7.0), f(10.0), 7},
-		{"calcium", "Calcium", "fixed", "ppm", f(400), f(450), 7},
-		{"magnesium", "Magnesium", "fixed", "ppm", f(1250), f(1400), 14},
-		{"nitrate", "Nitrate", "fixed", "ppm", f(2), f(15), 7},
-		{"phosphate", "Phosphate", "phosphate", "", f(0.02), f(0.10), 7},
-		{"ammonia", "Ammonia", "fixed", "ppm", nil, f(0.05), 30},
-		{"nitrite", "Nitrite", "fixed", "ppm", nil, f(0.1), 30},
+		{"temperature", "Temperature", "temperature", "", f(25.0), f(26.5), 7, 1},
+		{"salinity", "Salinity", "salinity", "", f(34.0), f(35.5), 7, 3},
+		{"ph", "pH", "fixed", "", f(7.9), f(8.4), 7, 1},
+		{"alkalinity", "Alkalinity", "alkalinity", "", f(7.0), f(10.0), 7, 1},
+		{"calcium", "Calcium", "fixed", "ppm", f(400), f(450), 7, 0},
+		{"magnesium", "Magnesium", "fixed", "ppm", f(1250), f(1400), 14, 0},
+		{"nitrate", "Nitrate", "fixed", "ppm", f(2), f(15), 7, 1},
+		{"phosphate", "Phosphate", "phosphate", "", f(0.02), f(0.10), 7, 2},
+		{"ammonia", "Ammonia", "fixed", "ppm", nil, f(0.05), 30, 2},
+		{"nitrite", "Nitrite", "fixed", "ppm", nil, f(0.1), 30, 1},
 	}
 
 	rows, err := d.R.QueryContext(t.Context(),
-		`SELECT preset_key, name, unit_family, unit_label, default_low, default_high, default_test_interval_days
+		`SELECT preset_key, name, unit_family, unit_label, default_low, default_high, default_test_interval_days, decimals
 		FROM parameter_definitions ORDER BY sort_order`)
 	if err != nil {
 		t.Fatal(err)
@@ -155,7 +156,7 @@ func TestMigrateSeedsParameterPresets(t *testing.T) {
 	var got []preset
 	for rows.Next() {
 		var p preset
-		if err := rows.Scan(&p.key, &p.name, &p.family, &p.label, &p.low, &p.high, &p.interval); err != nil {
+		if err := rows.Scan(&p.key, &p.name, &p.family, &p.label, &p.low, &p.high, &p.interval, &p.decimals); err != nil {
 			t.Fatal(err)
 		}
 		got = append(got, p)
@@ -168,7 +169,7 @@ func TestMigrateSeedsParameterPresets(t *testing.T) {
 	}
 	for i := range want {
 		g, w := got[i], want[i]
-		if g.key != w.key || g.name != w.name || g.family != w.family || g.label != w.label || g.interval != w.interval ||
+		if g.key != w.key || g.name != w.name || g.family != w.family || g.label != w.label || g.interval != w.interval || g.decimals != w.decimals ||
 			!equalFloatPtr(g.low, w.low) || !equalFloatPtr(g.high, w.high) {
 			t.Errorf("preset %d = %+v, want %+v", i, g, w)
 		}

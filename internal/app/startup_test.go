@@ -67,7 +67,7 @@ func TestOpenDatabaseCreatesSchemaAndClearsTmp(t *testing.T) {
 	}
 	defer d.Close()
 
-	if n := presetCount(t, filepath.Join(dataDir, dbFileName)); n != 10 {
+	if n := presetCount(t, filepath.Join(dataDir, DBFileName)); n != 10 {
 		t.Errorf("%d presets seeded, want 10", n)
 	}
 	entries, err := os.ReadDir(tmp)
@@ -104,7 +104,7 @@ func TestOpenDatabaseKeepsDataAcrossRestart(t *testing.T) {
 	if err := d.R.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM tanks WHERE name = 'survivor'`).Scan(&n); err != nil || n != 1 {
 		t.Errorf("tank count after restart = %d, %v; want 1", n, err)
 	}
-	if n := presetCount(t, filepath.Join(dataDir, dbFileName)); n != 10 {
+	if n := presetCount(t, filepath.Join(dataDir, DBFileName)); n != 10 {
 		t.Errorf("%d presets after restart, want 10", n)
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, backupsDirName)); err == nil {
@@ -158,10 +158,70 @@ func TestRunPreparesDatabaseBeforeServing(t *testing.T) {
 		t.Errorf("no database ready log:\n%s", logs.String())
 	}
 	// SQLite removes the write-ahead log when the last connection closes cleanly.
-	if _, err := os.Stat(filepath.Join(dataDir, dbFileName+"-wal")); err == nil {
+	if _, err := os.Stat(filepath.Join(dataDir, DBFileName+"-wal")); err == nil {
 		t.Error("database still open after Run returned")
 	}
-	if n := presetCount(t, filepath.Join(dataDir, dbFileName)); n != 10 {
+	if n := presetCount(t, filepath.Join(dataDir, DBFileName)); n != 10 {
 		t.Errorf("%d presets seeded, want 10", n)
+	}
+}
+
+func TestRunRemovesExpiredSessionsAtStartup(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "data")
+	logger := slog.New(slog.NewTextHandler(&syncBuffer{}, nil))
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	d, err := openDatabase(t.Context(), dataDir, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO users (id, username) VALUES (1, 'u')`,
+		`INSERT INTO sessions (token_hash, user_id, stage, auth_method, expires_at) VALUES (x'01', 1, 'active', 'password', '2000-01-01T00:00:00Z')`,
+		`INSERT INTO sessions (token_hash, user_id, stage, auth_method, expires_at) VALUES (x'02', 1, 'active', 'password', '2999-01-01T00:00:00Z')`,
+	} {
+		if _, err := d.W.ExecContext(t.Context(), q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = d.Close()
+
+	logs := &syncBuffer{}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, config.Config{Listen: "127.0.0.1:0", DataDir: dataDir}, slog.New(slog.NewTextHandler(logs, nil)))
+	}()
+	deadline := time.After(10 * time.Second)
+	for !strings.Contains(logs.String(), "msg=starting") {
+		select {
+		case err := <-done:
+			t.Fatalf("Run returned early: %v\n%s", err, logs.String())
+		case <-deadline:
+			t.Fatal("Run never started serving")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := sql.Open("sqlite", "file:"+filepath.Join(dataDir, DBFileName)+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	var expired, live int
+	if err := conn.QueryRow(`SELECT COUNT(*) FROM sessions WHERE token_hash = x'01'`).Scan(&expired); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRow(`SELECT COUNT(*) FROM sessions WHERE token_hash = x'02'`).Scan(&live); err != nil {
+		t.Fatal(err)
+	}
+	if expired != 0 || live != 1 {
+		t.Errorf("expired sessions left = %d, live sessions left = %d; want 0 and 1", expired, live)
 	}
 }

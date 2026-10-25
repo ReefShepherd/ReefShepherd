@@ -37,7 +37,7 @@ export interface Api {
   post<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T>;
   patch<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T>;
   put<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T>;
-  del<T = void>(path: string, options?: RequestOptions): Promise<T>;
+  del<T = void>(path: string, body?: unknown, options?: RequestOptions): Promise<T>;
 }
 
 export interface ApiDeps {
@@ -129,7 +129,7 @@ export function createApi(deps: ApiDeps = {}): Api {
     post: (path, body, options) => request('POST', path, body, options),
     patch: (path, body, options) => request('PATCH', path, body, options),
     put: (path, body, options) => request('PUT', path, body, options),
-    del: (path, options) => request('DELETE', path, undefined, options)
+    del: (path, body, options) => request('DELETE', path, body, options)
   };
 }
 

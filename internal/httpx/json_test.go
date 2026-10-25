@@ -2,10 +2,12 @@ package httpx
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWriteErrorFormat(t *testing.T) {
@@ -136,4 +138,83 @@ func TestDecodeJSONTooLarge(t *testing.T) {
 	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusRequestEntityTooLarge || apiErr.Code != CodePayloadTooLarge {
 		t.Fatalf("error = %v", err)
 	}
+}
+
+func TestWriteErrorSendsRetryAfter(t *testing.T) {
+	rec := httptest.NewRecorder()
+	WriteError(rec, TooManyRequests("slow down", 90*time.Second+time.Millisecond))
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("status = %d", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "91" {
+		t.Errorf("Retry-After = %q, want 91", got)
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"too_many_requests"`) {
+		t.Errorf("body = %s", rec.Body)
+	}
+	rec = httptest.NewRecorder()
+	WriteError(rec, TooManyRequests("slow down", 0))
+	if got := rec.Header().Get("Retry-After"); got != "1" {
+		t.Errorf("Retry-After for zero wait = %q, want 1", got)
+	}
+}
+
+func TestFailLogsInternalErrorsOnly(t *testing.T) {
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/thing", nil)
+
+	rec := httptest.NewRecorder()
+	Fail(logger, rec, req, errors.New("disk on fire"))
+	if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "disk") {
+		t.Errorf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(logs.String(), "disk on fire") || !strings.Contains(logs.String(), "/api/v1/thing") {
+		t.Errorf("log = %q", logs.String())
+	}
+
+	logs.Reset()
+	rec = httptest.NewRecorder()
+	Fail(logger, rec, req, NotFound("nope"))
+	if rec.Code != http.StatusNotFound || logs.Len() != 0 {
+		t.Errorf("client error: status=%d log=%q", rec.Code, logs.String())
+	}
+}
+
+func TestRequireJSONOrNoBody(t *testing.T) {
+	chunked := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader("data"))
+	chunked.ContentLength = -1
+	tests := []struct {
+		name string
+		req  *http.Request
+		ok   bool
+	}{
+		{"no body, no type", httptest.NewRequest(http.MethodPost, "/x", nil), true},
+		{"empty body, no type", httptest.NewRequest(http.MethodPost, "/x", strings.NewReader("")), true},
+		{"json type", withType(httptest.NewRequest(http.MethodPost, "/x", strings.NewReader("{}")), "application/json"), true},
+		{"json type with charset", withType(httptest.NewRequest(http.MethodPost, "/x", strings.NewReader("{}")), "application/json; charset=utf-8"), true},
+		{"json type, empty body", withType(httptest.NewRequest(http.MethodPost, "/x", nil), "application/json"), true},
+		{"form type, empty body", withType(httptest.NewRequest(http.MethodPost, "/x", nil), "application/x-www-form-urlencoded"), false},
+		{"form type with body", withType(httptest.NewRequest(http.MethodPost, "/x", strings.NewReader("a=b")), "application/x-www-form-urlencoded"), false},
+		{"text type", withType(httptest.NewRequest(http.MethodPost, "/x", strings.NewReader("{}")), "text/plain"), false},
+		{"multipart type", withType(httptest.NewRequest(http.MethodPost, "/x", nil), "multipart/form-data; boundary=x"), false},
+		{"malformed type", withType(httptest.NewRequest(http.MethodPost, "/x", nil), "json/"), false},
+		{"body without a type", httptest.NewRequest(http.MethodPost, "/x", strings.NewReader("a=b")), false},
+		{"unknown length without a type", chunked, false},
+	}
+	for _, tc := range tests {
+		err := RequireJSONOrNoBody(tc.req)
+		var apiErr *APIError
+		switch {
+		case tc.ok && err != nil:
+			t.Errorf("%s: unexpected error %v", tc.name, err)
+		case !tc.ok && (!errors.As(err, &apiErr) || apiErr.Status != http.StatusUnsupportedMediaType):
+			t.Errorf("%s: err = %v, want 415", tc.name, err)
+		}
+	}
+}
+
+func withType(r *http.Request, ct string) *http.Request {
+	r.Header.Set("Content-Type", ct)
+	return r
 }

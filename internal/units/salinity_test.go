@@ -112,9 +112,12 @@ func TestSalinityMonotonicAndHobbyPairs(t *testing.T) {
 		}
 		prev = sg
 	}
-	// 35 ppt is 1.0264 on a 25/25 hydrometer, and a nominal 1.026 reads a little under 35 ppt.
+	// 35 ppt is 1.0264 on a 25/25 hydrometer, which shows as 1.026 at SG display precision.
 	if got := Round(FromCanonical(Salinity, SG, 35), 4); got != 1.0264 {
 		t.Errorf("35 ppt = SG %v, want 1.0264", got)
+	}
+	if got := Round(FromCanonical(Salinity, SG, 35), Precision(Salinity, SG)); got != 1.026 {
+		t.Errorf("35 ppt displays as SG %v, want 1.026", got)
 	}
 	ppt, err := ToCanonical(Salinity, SG, 1.026)
 	if err != nil {

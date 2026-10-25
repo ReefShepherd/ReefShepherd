@@ -3,7 +3,11 @@ package httpx
 
 import (
 	"errors"
+	"log/slog"
+	"math"
 	"net/http"
+	"strconv"
+	"time"
 )
 
 // Error codes used in the "code" field of the JSON error body.
@@ -14,6 +18,7 @@ const (
 	CodeForbidden            = "forbidden"
 	CodeNotFound             = "not_found"
 	CodeConflict             = "conflict"
+	CodeTooManyRequests      = "too_many_requests"
 	CodePayloadTooLarge      = "payload_too_large"
 	CodeUnsupportedMediaType = "unsupported_media_type"
 	CodeInternal             = "internal"
@@ -26,6 +31,8 @@ type APIError struct {
 	Message string
 	// Fields maps a request field name to what is wrong with it.
 	Fields map[string]string
+	// Header holds extra response headers, such as Retry-After.
+	Header http.Header
 }
 
 func (e *APIError) Error() string {
@@ -67,6 +74,14 @@ func Conflict(message string) *APIError {
 	return NewError(http.StatusConflict, CodeConflict, message)
 }
 
+// TooManyRequests is a 429 that tells the client how long to wait.
+func TooManyRequests(message string, retryAfter time.Duration) *APIError {
+	e := NewError(http.StatusTooManyRequests, CodeTooManyRequests, message)
+	seconds := max(1, int64(math.Ceil(retryAfter.Seconds())))
+	e.Header = http.Header{"Retry-After": {strconv.FormatInt(seconds, 10)}}
+	return e
+}
+
 type errorBody struct {
 	Error errorDetail `json:"error"`
 }
@@ -83,9 +98,28 @@ func WriteError(w http.ResponseWriter, err error) {
 	if !errors.As(err, &apiErr) {
 		apiErr = NewError(http.StatusInternalServerError, CodeInternal, "internal error")
 	}
+	for name, values := range apiErr.Header {
+		w.Header()[name] = values
+	}
 	WriteJSON(w, apiErr.Status, errorBody{Error: errorDetail{
 		Code:    apiErr.Code,
 		Message: apiErr.Message,
 		Fields:  apiErr.Fields,
 	}})
+}
+
+// Fail writes err as the JSON error body; an error that is not an *APIError is logged first, since the client only sees "internal error".
+func Fail(logger *slog.Logger, w http.ResponseWriter, r *http.Request, err error) {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		if logger == nil {
+			logger = slog.Default()
+		}
+		logger.LogAttrs(r.Context(), slog.LevelError, "request failed",
+			slog.String("method", r.Method),
+			slog.String("path", r.URL.Path),
+			slog.Any("error", err),
+		)
+	}
+	WriteError(w, err)
 }

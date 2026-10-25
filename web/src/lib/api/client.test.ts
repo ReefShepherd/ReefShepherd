@@ -49,6 +49,22 @@ describe('requests', () => {
     expect((del.headers as Record<string, string>)['Content-Type']).toBeUndefined();
   });
 
+  it('sends a JSON body with DELETE when one is given', async () => {
+    const { api, fetchMock } = setup(() => new Response(null, { status: 204 }));
+    await api.del('/me/totp', { password: 'secret' });
+    const init = fetchMock.mock.calls[0][1]!;
+    expect(init.method).toBe('DELETE');
+    expect(init.body).toBe('{"password":"secret"}');
+    expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+  });
+
+  it('passes the query options to DELETE after the body', async () => {
+    const { api, fetchMock } = setup(() => new Response(null, { status: 204 }));
+    await api.del('/tanks/1', undefined, { query: { force: true } });
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/tanks/1?force=true');
+    expect(fetchMock.mock.calls[0][1]!.body).toBeUndefined();
+  });
+
   it('returns undefined for 204 replies', async () => {
     const { api } = setup(() => new Response(null, { status: 204 }));
     expect(await api.del('/tanks/1')).toBeUndefined();

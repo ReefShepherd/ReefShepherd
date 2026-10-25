@@ -85,7 +85,7 @@ var families = [...]familyDef{
 	}},
 	{Salinity, PPT, []UnitInfo{
 		linear(PPT, "ppt", 1, 1, 0),
-		linear(SG, "SG", 4, 1, 0),
+		linear(SG, "SG", 3, 1, 0),
 	}},
 	{Alkalinity, DKH, []UnitInfo{
 		linear(DKH, "dKH", 1, 1, 0),
@@ -93,7 +93,7 @@ var families = [...]familyDef{
 		linear(PPMCaCO3, "ppm CaCO3", 0, 17.848, 0),
 	}},
 	{Phosphate, PPM, []UnitInfo{
-		linear(PPM, "ppm", 3, 1, 0),
+		linear(PPM, "ppm", 2, 1, 0),
 		linear(PPB, "ppb", 0, 1000, 0),
 	}},
 	{Volume, Liter, []UnitInfo{

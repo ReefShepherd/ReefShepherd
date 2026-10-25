@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/reefshepherd/reefshepherd/internal/auth"
+	"github.com/reefshepherd/reefshepherd/internal/auth/password"
 	"github.com/reefshepherd/reefshepherd/internal/config"
 	"github.com/reefshepherd/reefshepherd/internal/db"
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
@@ -19,6 +21,9 @@ import (
 	"github.com/reefshepherd/reefshepherd/internal/version"
 	"github.com/reefshepherd/reefshepherd/internal/webui"
 )
+
+// DBFileName is the database file inside the data directory, shared with the admin commands so they open the file the server uses.
+const DBFileName = "reefshepherd.db"
 
 const (
 	// maxBodyBytes is the default request body limit; routes that take uploads need a different one.
@@ -28,7 +33,6 @@ const (
 		"base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 
 	// Names inside the data directory.
-	dbFileName     = "reefshepherd.db"
 	backupsDirName = "backups"
 	tmpDirName     = "tmp"
 
@@ -42,6 +46,7 @@ type App struct {
 	cfg     config.Config
 	logger  *slog.Logger
 	handler http.Handler
+	auth    *auth.Service
 }
 
 // New builds the route table, serving the embedded web UI, and wraps it in the middleware stack.
@@ -51,6 +56,11 @@ func New(cfg config.Config, logger *slog.Logger, database *db.DB, store *setting
 
 // newWithUI is New with the handler for non-API paths supplied by the caller.
 func newWithUI(cfg config.Config, logger *slog.Logger, database *db.DB, store *settings.Store, ui http.Handler) (*App, error) {
+	return newApp(cfg, logger, database, store, password.NewHasher(password.DefaultParams()), ui)
+}
+
+// newApp is newWithUI with the password hasher supplied by the caller, so tests can use cheap parameters.
+func newApp(cfg config.Config, logger *slog.Logger, database *db.DB, store *settings.Store, hasher *password.Hasher, ui http.Handler) (*App, error) {
 	if database == nil || store == nil {
 		return nil, errors.New("database and settings store are required")
 	}
@@ -59,8 +69,9 @@ func newWithUI(cfg config.Config, logger *slog.Logger, database *db.DB, store *s
 		return nil, fmt.Errorf("build cross-origin protection: %w", err)
 	}
 
+	authService := auth.NewService(auth.Deps{DB: database, Settings: store, Passwords: hasher, Config: cfg, Logger: logger})
 	mux := http.NewServeMux()
-	registerRoutes(mux, database, store, ui)
+	registerRoutes(mux, routeDeps{Config: cfg, Logger: logger, DB: database, Settings: store, Auth: authService}, ui)
 
 	handler := httpx.Chain(mux,
 		httpx.RequestLog(logger),
@@ -69,7 +80,7 @@ func newWithUI(cfg config.Config, logger *slog.Logger, database *db.DB, store *s
 		httpx.MaxBody(maxBodyBytes),
 		crossOrigin,
 	)
-	return &App{cfg: cfg, logger: logger, handler: handler}, nil
+	return &App{cfg: cfg, logger: logger, handler: handler, auth: authService}, nil
 }
 
 // Handler is the full HTTP handler including middleware.
@@ -95,6 +106,9 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	if err := a.auth.CleanupExpired(ctx); err != nil {
+		logger.Warn("clean up expired sessions", slog.Any("error", err))
+	}
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", cfg.Listen, err)
@@ -113,7 +127,7 @@ func openDatabase(ctx context.Context, dataDir string, logger *slog.Logger) (*db
 	if err := clearTmp(filepath.Join(dataDir, tmpDirName)); err != nil {
 		return nil, err
 	}
-	database, err := db.Open(filepath.Join(dataDir, dbFileName))
+	database, err := db.Open(filepath.Join(dataDir, DBFileName))
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}

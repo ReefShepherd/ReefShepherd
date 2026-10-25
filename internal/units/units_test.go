@@ -43,9 +43,9 @@ func TestCatalogDecimals(t *testing.T) {
 		want int
 	}{
 		{Temperature, Celsius, 1}, {Temperature, Fahrenheit, 1},
-		{Salinity, PPT, 1}, {Salinity, SG, 4},
+		{Salinity, PPT, 1}, {Salinity, SG, 3},
 		{Alkalinity, DKH, 1}, {Alkalinity, MeqPerL, 2}, {Alkalinity, PPMCaCO3, 0},
-		{Phosphate, PPM, 3}, {Phosphate, PPB, 0},
+		{Phosphate, PPM, 2}, {Phosphate, PPB, 0},
 		{Volume, Liter, 1}, {Volume, USGallon, 1}, {Volume, UKGallon, 1},
 		{Fixed, None, 2}, {Fixed, "mV", 2},
 		{Salinity, DKH, -1}, {"nope", PPT, -1},
@@ -62,7 +62,7 @@ func TestCatalogJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"family":"salinity","canonical":"ppt","units":[{"unit":"ppt","label":"ppt","decimals":1},{"unit":"sg","label":"SG","decimals":4}]}`
+	want := `{"family":"salinity","canonical":"ppt","units":[{"unit":"ppt","label":"ppt","decimals":1},{"unit":"sg","label":"SG","decimals":3}]}`
 	if string(b) != want {
 		t.Errorf("json = %s\nwant   %s", b, want)
 	}
@@ -181,9 +181,9 @@ func TestRoundTripEveryUnit(t *testing.T) {
 func TestDisplayGridStable(t *testing.T) {
 	grid := map[Family]map[Unit][]float64{
 		Temperature: {Celsius: {24, 25.5, 26.1}, Fahrenheit: {75, 77, 78.8, 79.5, 82}},
-		Salinity:    {PPT: {33, 34.5, 35}, SG: {1.0230, 1.0250, 1.0260, 1.0264, 1.0270}},
+		Salinity:    {PPT: {33, 34.5, 35}, SG: {1.023, 1.025, 1.026, 1.027}},
 		Alkalinity:  {DKH: {7, 8.2, 9.5}, MeqPerL: {2.5, 2.85, 3.2}, PPMCaCO3: {100, 143, 160}},
-		Phosphate:   {PPM: {0, 0.01, 0.035, 0.1}, PPB: {5, 30, 100}},
+		Phosphate:   {PPM: {0, 0.01, 0.03, 0.1}, PPB: {5, 30, 100}},
 		Volume:      {Liter: {75.7, 200}, USGallon: {20, 55, 120}, UKGallon: {15, 40, 100}},
 	}
 	for f, byUnit := range grid {
@@ -254,7 +254,7 @@ func TestRound(t *testing.T) {
 		dec  int
 		want float64
 	}{
-		{1.02637, 4, 1.0264}, {1.02634, 4, 1.0263}, {34.45, 1, 34.5}, {-2.5, 0, -3}, {0.0296, 3, 0.03}, {12.4, 0, 12},
+		{1.02637, 4, 1.0264}, {1.02634, 4, 1.0263}, {1.0264, 3, 1.026}, {34.45, 1, 34.5}, {-2.5, 0, -3}, {0.0296, 3, 0.03}, {12.4, 0, 12},
 	}
 	for _, tc := range tests {
 		if got := Round(tc.v, tc.dec); got != tc.want {

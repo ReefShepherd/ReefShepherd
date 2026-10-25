@@ -37,7 +37,7 @@ func TestUsageAndUnknownCommand(t *testing.T) {
 }
 
 func TestStubSubcommands(t *testing.T) {
-	for _, cmd := range []string{"admin", "restore"} {
+	for _, cmd := range []string{"restore"} {
 		if code, _, errOut := runCmd(cmd); code != 1 || !strings.Contains(errOut, "not implemented") {
 			t.Errorf("%s: code=%d stderr=%q", cmd, code, errOut)
 		}

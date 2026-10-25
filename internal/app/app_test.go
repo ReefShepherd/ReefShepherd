@@ -96,7 +96,9 @@ func TestSecurityHeadersOnEveryResponse(t *testing.T) {
 }
 
 func TestUnknownAPIPathIsJSON404(t *testing.T) {
-	rec := do(newTestApp(t, config.Config{}), http.MethodGet, "/api/v1/nothing", "", nil)
+	c := newClient(t, newAPITestApp(t, config.Config{}))
+	c.setup(nil)
+	rec := c.do(http.MethodGet, "/api/v1/nothing", nil)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d", rec.Code)
 	}
@@ -126,13 +128,14 @@ func TestCrossOriginProtectionInFullStack(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("cross-site post: status = %d", rec.Code)
 	}
+	// Past the origin check the request reaches the router, which answers setup_required on a fresh instance.
 	rec = do(a, http.MethodPost, "/api/v1/x", "{}", map[string]string{"Sec-Fetch-Site": "cross-site", "Origin": "https://reef.home.lan"})
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("trusted-origin post should reach the router (404 here): status = %d", rec.Code)
+	if rec.Code != http.StatusConflict {
+		t.Errorf("trusted-origin post should reach the router: status = %d", rec.Code)
 	}
 	rec = do(a, http.MethodPost, "/api/v1/x", "{}", map[string]string{"Sec-Fetch-Site": "same-origin"})
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("same-origin post should reach the router (404 here): status = %d", rec.Code)
+	if rec.Code != http.StatusConflict {
+		t.Errorf("same-origin post should reach the router: status = %d", rec.Code)
 	}
 }
 

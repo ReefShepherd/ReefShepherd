@@ -45,6 +45,22 @@ func DecodeJSON(r *http.Request, dst any) error {
 	return nil
 }
 
+// RequireJSONOrNoBody rejects a request to an endpoint that takes no body when it carries a non-JSON content type or a body of any other kind, so form and text posts are refused here as they are everywhere else.
+func RequireJSONOrNoBody(r *http.Request) error {
+	unsupported := NewError(http.StatusUnsupportedMediaType, CodeUnsupportedMediaType, "Content-Type must be application/json")
+	if ct := r.Header.Get("Content-Type"); ct != "" {
+		if mediaType, _, err := mime.ParseMediaType(ct); err != nil || mediaType != "application/json" {
+			return unsupported
+		}
+		return nil
+	}
+	// A missing content type is fine only when there is nothing to interpret; an unknown length counts as a body.
+	if r.ContentLength != 0 && r.Body != http.NoBody {
+		return unsupported
+	}
+	return nil
+}
+
 func classifyDecodeError(err error) error {
 	var (
 		syntaxErr  *json.SyntaxError

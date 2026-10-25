@@ -1,9 +1,11 @@
 package app
 
 import (
+	"log/slog"
 	"net/http"
 
 	"github.com/reefshepherd/reefshepherd/internal/auth"
+	"github.com/reefshepherd/reefshepherd/internal/config"
 	"github.com/reefshepherd/reefshepherd/internal/dashboard"
 	"github.com/reefshepherd/reefshepherd/internal/db"
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
@@ -14,21 +16,36 @@ import (
 	"github.com/reefshepherd/reefshepherd/internal/version"
 )
 
-// registerRoutes is the single route table; each feature package fills in its own Routes function.
-func registerRoutes(mux *http.ServeMux, database *db.DB, store *settings.Store, ui http.Handler) {
+// routeDeps are the shared services every feature package's routes are built from.
+type routeDeps struct {
+	Config   config.Config
+	Logger   *slog.Logger
+	DB       *db.DB
+	Settings *settings.Store
+	Auth     *auth.Service
+}
+
+// registerRoutes is the single route table, and everything under /api/ requires a signed-in user except the explicitly public routes.
+func registerRoutes(mux *http.ServeMux, d routeDeps, ui http.Handler) {
 	mux.HandleFunc("GET /healthz", healthz)
 
-	auth.Routes(mux, auth.Deps{DB: database, Settings: store})
-	users.Routes(mux, users.Deps{DB: database, Settings: store})
-	settings.Routes(mux, settings.Deps{DB: database, Settings: store})
-	tanks.Routes(mux, tanks.Deps{DB: database, Settings: store})
-	params.Routes(mux, params.Deps{DB: database, Settings: store})
-	dashboard.Routes(mux, dashboard.Deps{DB: database, Settings: store})
+	usersDeps := users.Deps{DB: d.DB, Settings: d.Settings, Auth: d.Auth, Logger: d.Logger}
+	d.Auth.PublicRoutes(mux)
+	users.PublicRoutes(mux, usersDeps)
+
+	protected := http.NewServeMux()
+	d.Auth.Routes(protected)
+	users.Routes(protected, usersDeps)
+	settings.Routes(protected, settings.Deps{DB: d.DB, Settings: d.Settings, Auth: d.Auth, Logger: d.Logger})
+	tanks.Routes(protected, tanks.Deps{DB: d.DB, Settings: d.Settings})
+	params.Routes(protected, params.Deps{DB: d.DB, Settings: d.Settings})
+	dashboard.Routes(protected, dashboard.Deps{DB: d.DB, Settings: d.Settings})
 
 	// Any API path without a more specific route is a JSON 404, never the single-page-app fallback.
-	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
+	protected.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		httpx.WriteError(w, httpx.NotFound("no such API endpoint"))
 	})
+	mux.Handle("/api/", d.Auth.RequireUser(protected))
 	mux.Handle("/", ui)
 }
 

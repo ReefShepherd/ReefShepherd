@@ -53,7 +53,7 @@ func TestDefaultsWhenNothingIsStored(t *testing.T) {
 	}
 	wantUnits := map[units.Family]units.Unit{
 		units.Temperature: units.Celsius,
-		units.Salinity:    units.PPT,
+		units.Salinity:    units.SG,
 		units.Alkalinity:  units.DKH,
 		units.Phosphate:   units.PPM,
 		units.Volume:      units.Liter,
@@ -65,6 +65,24 @@ func TestDefaultsWhenNothingIsStored(t *testing.T) {
 	}
 	if n := rowCount(t, d); n != 0 {
 		t.Errorf("reading defaults wrote %d rows", n)
+	}
+}
+
+func TestSalinityDefaultsToSGAndPPTCanBeChosen(t *testing.T) {
+	s, d := newStore(t)
+	ctx := t.Context()
+
+	if got, err := s.GetUnit(ctx, units.Salinity); err != nil || got != units.SG {
+		t.Errorf("default salinity unit = %q, %v; want %q", got, err, units.SG)
+	}
+	if _, ok := storedValue(t, d, "unit_salinity"); ok {
+		t.Error("reading the default stored a salinity unit")
+	}
+	if err := s.SetUnit(ctx, units.Salinity, units.PPT); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetUnit(ctx, units.Salinity); err != nil || got != units.PPT {
+		t.Errorf("chosen salinity unit = %q, %v; want %q", got, err, units.PPT)
 	}
 }
 
@@ -94,7 +112,7 @@ func TestSettersRoundTrip(t *testing.T) {
 	must(s.SetAuthDisabledUserID(ctx, 7))
 	must(s.SetReminderDefaultTime(ctx, "18:30"))
 	must(s.SetUnit(ctx, units.Temperature, units.Fahrenheit))
-	must(s.SetUnit(ctx, units.Salinity, units.SG))
+	must(s.SetUnit(ctx, units.Salinity, units.PPT))
 	must(s.SetUnit(ctx, units.Alkalinity, units.MeqPerL))
 	must(s.SetUnit(ctx, units.Phosphate, units.PPB))
 	must(s.SetUnit(ctx, units.Volume, units.USGallon))
@@ -120,7 +138,7 @@ func TestSettersRoundTrip(t *testing.T) {
 
 	// The unit keys are part of the documented settings contract.
 	for key, want := range map[string]string{
-		"unit_temperature": "f", "unit_salinity": "sg", "unit_alkalinity": "meq_l",
+		"unit_temperature": "f", "unit_salinity": "ppt", "unit_alkalinity": "meq_l",
 		"unit_phosphate": "ppb", "unit_volume": "us_gal", "setup_completed": "true",
 	} {
 		if got, ok := storedValue(t, d, key); !ok || got != want {

@@ -1,3 +1,4 @@
+// Package settings owns the instance settings and their endpoints.
 package settings
 
 import (
@@ -44,12 +45,17 @@ var ErrInvalid = errors.New("invalid setting value")
 
 // Store reads and writes the instance settings; a key that was never set reads as its default.
 type Store struct {
-	db *db.DB
+	r, w dbgen.DBTX
 }
 
 // NewStore returns a store on the given database.
 func NewStore(d *db.DB) *Store {
-	return &Store{db: d}
+	return &Store{r: d.R, w: d.W}
+}
+
+// WithTx returns a store whose reads and writes all go through tx, so they commit or roll back together with the caller's other changes.
+func (s *Store) WithTx(tx *sql.Tx) *Store {
+	return &Store{r: tx, w: tx}
 }
 
 // GetSetupCompleted reports whether first-run setup has finished.
@@ -69,11 +75,19 @@ func (s *Store) GetInstanceName(ctx context.Context) (string, error) {
 
 // SetInstanceName stores the instance name, which must not be blank.
 func (s *Store) SetInstanceName(ctx context.Context, name string) error {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return fmt.Errorf("%w: instance name is blank", ErrInvalid)
+	name, err := cleanInstanceName(name)
+	if err != nil {
+		return err
 	}
 	return s.set(ctx, keyInstanceName, name)
+}
+
+func cleanInstanceName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("%w: instance name is blank", ErrInvalid)
+	}
+	return name, nil
 }
 
 // GetTimezone returns the IANA name of the instance timezone.
@@ -83,10 +97,17 @@ func (s *Store) GetTimezone(ctx context.Context) (string, error) {
 
 // SetTimezone stores the IANA name of the instance timezone.
 func (s *Store) SetTimezone(ctx context.Context, name string) error {
+	if err := checkTimezone(name); err != nil {
+		return err
+	}
+	return s.set(ctx, keyTimezone, name)
+}
+
+func checkTimezone(name string) error {
 	if _, err := time.LoadLocation(name); err != nil || name == "" || name == "Local" {
 		return fmt.Errorf("%w: unknown timezone %q", ErrInvalid, name)
 	}
-	return s.set(ctx, keyTimezone, name)
+	return nil
 }
 
 // GetAuthMode returns the login mode set in the web UI, config.AuthModePassword or config.AuthModeDisabled.
@@ -128,19 +149,23 @@ func (s *Store) SetAuthDisabledUserID(ctx context.Context, id int64) error {
 
 // ClearAuthDisabledUserID removes the stored user, so GetAuthDisabledUserID reads 0 again.
 func (s *Store) ClearAuthDisabledUserID(ctx context.Context) error {
-	if _, err := db.Q(s.db.W).DeleteSetting(ctx, keyAuthDisabledUserID); err != nil {
+	if _, err := db.Q(s.w).DeleteSetting(ctx, keyAuthDisabledUserID); err != nil {
 		return fmt.Errorf("clear setting %s: %w", keyAuthDisabledUserID, err)
 	}
 	return nil
 }
 
-// GetUnit returns the display unit chosen for a unit family; the default is the family's canonical unit.
+// GetUnit returns the display unit chosen for a unit family; the default is the family's canonical unit, except salinity, which shows as SG.
 func (s *Store) GetUnit(ctx context.Context, family units.Family) (units.Unit, error) {
 	key, canonical, err := unitKey(family)
 	if err != nil {
 		return "", err
 	}
-	return getParsed(ctx, s, key, canonical, func(v string) (units.Unit, error) {
+	fallback := canonical
+	if family == units.Salinity {
+		fallback = units.SG
+	}
+	return getParsed(ctx, s, key, fallback, func(v string) (units.Unit, error) {
 		if _, ok := units.Info(family, units.Unit(v)); !ok {
 			return "", errors.New("unit is not in the family")
 		}
@@ -150,14 +175,23 @@ func (s *Store) GetUnit(ctx context.Context, family units.Family) (units.Unit, e
 
 // SetUnit stores the display unit for a unit family, which must be one of the family's units.
 func (s *Store) SetUnit(ctx context.Context, family units.Family, unit units.Unit) error {
-	key, _, err := unitKey(family)
+	key, err := checkUnit(family, unit)
 	if err != nil {
 		return err
 	}
-	if _, ok := units.Info(family, unit); !ok {
-		return fmt.Errorf("%w: unit %q for %s", ErrInvalid, unit, family)
-	}
 	return s.set(ctx, key, string(unit))
+}
+
+// checkUnit returns the settings key of the family when unit is one of its units.
+func checkUnit(family units.Family, unit units.Unit) (string, error) {
+	key, _, err := unitKey(family)
+	if err != nil {
+		return "", err
+	}
+	if _, ok := units.Info(family, unit); !ok {
+		return "", fmt.Errorf("%w: unit %q for %s", ErrInvalid, unit, family)
+	}
+	return key, nil
 }
 
 // unitKey maps a family with a display unit choice to its settings key and canonical unit.
@@ -176,14 +210,21 @@ func (s *Store) GetReminderDefaultTime(ctx context.Context) (string, error) {
 
 // SetReminderDefaultTime stores the default reminder time as HH:MM on a 24-hour clock.
 func (s *Store) SetReminderDefaultTime(ctx context.Context, hhmm string) error {
-	if t, err := time.Parse(reminderTimeLayout, hhmm); err != nil || t.Format(reminderTimeLayout) != hhmm {
-		return fmt.Errorf("%w: reminder time %q is not HH:MM", ErrInvalid, hhmm)
+	if err := checkReminderTime(hhmm); err != nil {
+		return err
 	}
 	return s.set(ctx, keyReminderDefaultTime, hhmm)
 }
 
+func checkReminderTime(hhmm string) error {
+	if t, err := time.Parse(reminderTimeLayout, hhmm); err != nil || t.Format(reminderTimeLayout) != hhmm {
+		return fmt.Errorf("%w: reminder time %q is not HH:MM", ErrInvalid, hhmm)
+	}
+	return nil
+}
+
 func (s *Store) lookup(ctx context.Context, key string) (value string, found bool, err error) {
-	v, err := db.Q(s.db.R).GetSetting(ctx, key)
+	v, err := db.Q(s.r).GetSetting(ctx, key)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
@@ -202,7 +243,7 @@ func (s *Store) get(ctx context.Context, key, fallback string) (string, error) {
 }
 
 func (s *Store) set(ctx context.Context, key, value string) error {
-	if err := db.Q(s.db.W).SetSetting(ctx, dbgen.SetSettingParams{Key: key, Value: value}); err != nil {
+	if err := db.Q(s.w).SetSetting(ctx, dbgen.SetSettingParams{Key: key, Value: value}); err != nil {
 		return fmt.Errorf("write setting %s: %w", key, err)
 	}
 	return nil

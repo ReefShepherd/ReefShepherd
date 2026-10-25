@@ -47,7 +47,9 @@ func run(ctx context.Context, args []string, env config.LookupFunc, stdout, stde
 		return 0
 	case "healthcheck":
 		return runHealthcheck(ctx, rest, env, stderr)
-	case "admin", "restore":
+	case "admin":
+		return runAdmin(ctx, rest, env, stdout, stderr)
+	case "restore":
 		fmt.Fprintf(stderr, "reefshepherd %s: not implemented yet\n", cmd)
 		return 1
 	case "help", "-h", "--help", "-help":
