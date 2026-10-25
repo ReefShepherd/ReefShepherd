@@ -145,10 +145,10 @@ func TestCreateEnablesPresetsWithOneInsert(t *testing.T) {
 	if ph.enabled != 1 || ph.low == nil || *ph.low != 7.9 || ph.high == nil || *ph.high != 8.4 || ph.kind != "after_last" || ph.interval == nil || *ph.interval != 7 || ph.sortOrder != 30 {
 		t.Errorf("ph = %+v", ph)
 	}
-	if alk.low == nil || *alk.low != 7.0 || *alk.high != 10.0 || alk.sortOrder != 40 {
+	if alk.low == nil || *alk.low != 7.0 || *alk.high != 11.0 || alk.sortOrder != 40 {
 		t.Errorf("alkalinity = %+v", alk)
 	}
-	if amm.low != nil || amm.high == nil || *amm.high != 0.05 || amm.interval == nil || *amm.interval != 30 {
+	if amm.low != nil || amm.high == nil || *amm.high != 0.10 || amm.interval == nil || *amm.interval != 30 {
 		t.Errorf("ammonia has an open lower bound and a 30-day interval: %+v", amm)
 	}
 	for _, r := range got {

@@ -73,7 +73,7 @@ test('tests for several parameters are logged in one form, with a decimal comma 
   await page.getByRole('button', { name: 'Add a note pH', exact: true }).click();
   await page.getByLabel('pH note').fill('after water change');
   await page.getByLabel('Calcium value').fill('420');
-  await page.getByLabel('Nitrate value').fill('40');
+  await page.getByLabel('Nitrate value').fill('60');
   await page.getByRole('button', { name: 'Save results' }).click();
 
   await expect(page.getByText('Saved 3 results.')).toBeVisible();

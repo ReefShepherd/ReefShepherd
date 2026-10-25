@@ -38,7 +38,7 @@ func TestListShipsThePresetsInOrderWithDisplayDefaults(t *testing.T) {
 		t.Fatalf("defs = %+v", defs)
 	}
 	temp := defs[0]
-	if temp.Unit != "f" || temp.UnitLabel != "°F" || temp.Decimals != 1 || !is(temp.DefaultLow, 77) || !is(temp.DefaultHigh, 79.7) || !is(temp.DefaultTestIntervalDays, 7) {
+	if temp.Unit != "f" || temp.UnitLabel != "°F" || temp.Decimals != 1 || !is(temp.DefaultLow, 76.1) || !is(temp.DefaultHigh, 81.5) || !is(temp.DefaultTestIntervalDays, 7) {
 		t.Errorf("temperature = %+v", temp)
 	}
 	var calcium Definition

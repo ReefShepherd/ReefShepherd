@@ -365,16 +365,16 @@ func TestPatchResult(t *testing.T) {
 
 	e.now = e.now.Add(time.Hour)
 	var got ResultView
-	e.must(http.StatusOK, http.MethodPatch, resultPath(id), map[string]any{"value": 80.6, "note": " retested ", "measured_at": "2026-10-23T09:00:00Z"}).decode(&got)
-	if got.Value != 80.6 || got.Note != "retested" || got.MeasuredAt != "2026-10-23T09:00:00Z" || got.UpdatedAt != "2026-10-24T13:00:00Z" ||
+	e.must(http.StatusOK, http.MethodPatch, resultPath(id), map[string]any{"value": 82.4, "note": " retested ", "measured_at": "2026-10-23T09:00:00Z"}).decode(&got)
+	if got.Value != 82.4 || got.Note != "retested" || got.MeasuredAt != "2026-10-23T09:00:00Z" || got.UpdatedAt != "2026-10-24T13:00:00Z" ||
 		got.CreatedAt != "2026-10-24T12:00:00Z" || got.Unit != "f" || got.ID != id || got.TankID != tank || got.ParameterID != temp || got.InRange {
 		t.Errorf("patched = %+v", got)
 	}
-	near(t, "stored °C", e.storedValues()[0], 27, 1e-9)
+	near(t, "stored °C", e.storedValues()[0], 28, 1e-9)
 
 	// Fields left out keep their value.
 	e.must(http.StatusOK, http.MethodPatch, resultPath(id), map[string]any{"note": ""}).decode(&got)
-	if got.Value != 80.6 || got.Note != "" || got.MeasuredAt != "2026-10-23T09:00:00Z" {
+	if got.Value != 82.4 || got.Note != "" || got.MeasuredAt != "2026-10-23T09:00:00Z" {
 		t.Errorf("note-only patch = %+v", got)
 	}
 	e.must(http.StatusOK, http.MethodPatch, resultPath(id), map[string]any{})
@@ -385,7 +385,7 @@ func TestPatchResult(t *testing.T) {
 	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"note": repeat("n", 2001)}, "note")
 	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"parameter_id": 3}, "parameter_id")
 	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"value": -9999, "note": repeat("n", 2001)}, "value", "note")
-	near(t, "stored °C after rejected patches", e.storedValues()[0], 27, 1e-9)
+	near(t, "stored °C after rejected patches", e.storedValues()[0], 28, 1e-9)
 	e.fail(http.StatusNotFound, "not_found", http.MethodPatch, resultPath(9999), map[string]any{"note": "x"})
 	e.fail(http.StatusNotFound, "not_found", http.MethodPatch, "/api/v1/results/abc", map[string]any{"note": "x"})
 }

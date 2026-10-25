@@ -17,7 +17,7 @@ func TestTankParametersListsEveryActiveParameterWithDefaultsUntilConfigured(t *t
 	}
 	alk := tp.find(t, e.preset("alkalinity"))
 	if alk.Configured || alk.Enabled || alk.Name != "Alkalinity" || alk.Unit != "dkh" || alk.UnitLabel != "dKH" || alk.Decimals != 1 ||
-		!is(alk.IdealLow, 7) || !is(alk.IdealHigh, 10) || alk.Schedule.Kind != "after_last" || !is(alk.Schedule.IntervalDays, 7) ||
+		!is(alk.IdealLow, 7) || !is(alk.IdealHigh, 11) || alk.Schedule.Kind != "after_last" || !is(alk.Schedule.IntervalDays, 7) ||
 		alk.Schedule.DueTime != "09:00" || alk.Schedule.IntervalWeeks != 1 || alk.Latest != nil || alk.NextDue != nil || alk.Overdue {
 		t.Errorf("alkalinity defaults = %+v", alk)
 	}
@@ -45,7 +45,7 @@ func TestTankParametersReadSettingsRowsFromThePresetInsert(t *testing.T) {
 		FROM parameter_definitions WHERE preset_key = 'nitrate'`, tank)
 
 	got := e.tankParams(tank).find(t, nitrate)
-	if !got.Configured || !got.Enabled || !is(got.IdealLow, 2) || !is(got.IdealHigh, 15) || got.Schedule.Kind != "after_last" ||
+	if !got.Configured || !got.Enabled || !is(got.IdealLow, 5) || !is(got.IdealHigh, 50) || got.Schedule.Kind != "after_last" ||
 		!is(got.Schedule.IntervalDays, 7) || got.Schedule.DueTime != "09:00" {
 		t.Errorf("nitrate = %+v", got)
 	}

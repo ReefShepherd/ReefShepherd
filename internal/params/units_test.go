@@ -49,7 +49,7 @@ func TestSwitchingUnitsChangesOutputButNotStoredRows(t *testing.T) {
 	before := e.storedValues()
 	var asF TankParameters
 	e.must(http.StatusOK, http.MethodGet, tankPath(tank, "/parameters"), nil).decode(&asF)
-	if got := asF.find(t, temp); got.Latest.Value != 77 || !is(got.IdealLow, 77) || !is(got.IdealHigh, 79.7) {
+	if got := asF.find(t, temp); got.Latest.Value != 77 || !is(got.IdealLow, 76.1) || !is(got.IdealHigh, 81.5) {
 		t.Errorf("in °F: %+v low=%v high=%v", got.Latest, got.IdealLow, got.IdealHigh)
 	}
 
@@ -69,7 +69,7 @@ func TestSwitchingUnitsChangesOutputButNotStoredRows(t *testing.T) {
 	}
 	var asC TankParameters
 	e.must(http.StatusOK, http.MethodGet, tankPath(tank, "/parameters"), nil).decode(&asC)
-	if got := asC.find(t, temp); !is(got.IdealLow, 25) || !is(got.IdealHigh, 26.5) {
+	if got := asC.find(t, temp); !is(got.IdealLow, 24.5) || !is(got.IdealHigh, 27.5) {
 		t.Errorf("range in °C: low=%v high=%v", got.IdealLow, got.IdealHigh)
 	}
 	if after := e.storedValues(); !slices.Equal(before, after) {

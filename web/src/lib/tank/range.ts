@@ -3,7 +3,7 @@ import { m } from '#lib/paraglide/messages.js';
 
 const noBreakSpace = String.fromCharCode(0xa0);
 
-/** An ideal range as text, such as "7.9 to 8.4 pH" or "Up to 0.05 ppm"; unit is the label shown after the numbers. */
+/** An ideal range as text, such as "7.9 to 8.4 pH" or "Up to 0.10 ppm"; unit is the label shown after the numbers. */
 export function rangeText(
   low: number | null,
   high: number | null,

@@ -134,15 +134,15 @@ func TestMigrateSeedsParameterPresets(t *testing.T) {
 	}
 	f := func(v float64) *float64 { return &v }
 	want := []preset{
-		{"temperature", "Temperature", "temperature", "", f(25.0), f(26.5), 7, 1},
+		{"temperature", "Temperature", "temperature", "", f(24.5), f(27.5), 7, 1},
 		{"salinity", "Salinity", "salinity", "", f(34.0), f(35.5), 7, 3},
 		{"ph", "pH", "fixed", "", f(7.9), f(8.4), 7, 1},
-		{"alkalinity", "Alkalinity", "alkalinity", "", f(7.0), f(10.0), 7, 1},
-		{"calcium", "Calcium", "fixed", "ppm", f(400), f(450), 7, 0},
+		{"alkalinity", "Alkalinity", "alkalinity", "", f(7.0), f(11.0), 7, 1},
+		{"calcium", "Calcium", "fixed", "ppm", f(380), f(450), 7, 0},
 		{"magnesium", "Magnesium", "fixed", "ppm", f(1250), f(1400), 14, 0},
-		{"nitrate", "Nitrate", "fixed", "ppm", f(2), f(15), 7, 1},
-		{"phosphate", "Phosphate", "phosphate", "", f(0.02), f(0.10), 7, 2},
-		{"ammonia", "Ammonia", "fixed", "ppm", nil, f(0.05), 30, 2},
+		{"nitrate", "Nitrate", "fixed", "ppm", f(5), f(50), 7, 1},
+		{"phosphate", "Phosphate", "phosphate", "", f(0.06), f(0.30), 7, 2},
+		{"ammonia", "Ammonia", "fixed", "ppm", nil, f(0.10), 30, 2},
 		{"nitrite", "Nitrite", "fixed", "ppm", nil, f(0.1), 30, 1},
 	}
 

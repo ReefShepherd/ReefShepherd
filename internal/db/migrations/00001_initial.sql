@@ -182,13 +182,13 @@ INSERT INTO parameter_definitions
     (preset_key, name, unit_family, unit_label, decimals,
      default_low, default_high, default_test_interval_days, sort_order)
 VALUES
-    ('temperature', 'Temperature', 'temperature', '', 1, 25.0, 26.5, 7, 10),
+    ('temperature', 'Temperature', 'temperature', '', 1, 24.5, 27.5, 7, 10),
     ('salinity', 'Salinity', 'salinity', '', 3, 34.0, 35.5, 7, 20),
     ('ph', 'pH', 'fixed', '', 1, 7.9, 8.4, 7, 30),
-    ('alkalinity', 'Alkalinity', 'alkalinity', '', 1, 7.0, 10.0, 7, 40),
-    ('calcium', 'Calcium', 'fixed', 'ppm', 0, 400, 450, 7, 50),
+    ('alkalinity', 'Alkalinity', 'alkalinity', '', 1, 7.0, 11.0, 7, 40),
+    ('calcium', 'Calcium', 'fixed', 'ppm', 0, 380, 450, 7, 50),
     ('magnesium', 'Magnesium', 'fixed', 'ppm', 0, 1250, 1400, 14, 60),
-    ('nitrate', 'Nitrate', 'fixed', 'ppm', 1, 2, 15, 7, 70),
-    ('phosphate', 'Phosphate', 'phosphate', '', 2, 0.02, 0.10, 7, 80),
-    ('ammonia', 'Ammonia', 'fixed', 'ppm', 2, NULL, 0.05, 30, 90),
+    ('nitrate', 'Nitrate', 'fixed', 'ppm', 1, 5, 50, 7, 70),
+    ('phosphate', 'Phosphate', 'phosphate', '', 2, 0.06, 0.30, 7, 80),
+    ('ammonia', 'Ammonia', 'fixed', 'ppm', 2, NULL, 0.10, 30, 90),
     ('nitrite', 'Nitrite', 'fixed', 'ppm', 1, NULL, 0.1, 30, 100);

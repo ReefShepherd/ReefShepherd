@@ -71,7 +71,7 @@ func TestSeriesReturnsPointsOldestFirstWithRangeAndUnit(t *testing.T) {
 	}
 	var empty Series
 	raw.decode(&empty)
-	if !is(empty.Range.Low, 400) || !is(empty.Range.High, 450) || empty.UnitLabel != "ppm" {
+	if !is(empty.Range.Low, 380) || !is(empty.Range.High, 450) || empty.UnitLabel != "ppm" {
 		t.Errorf("default range = %+v", empty)
 	}
 	// A parameter with a one-sided range reports null for the missing side.
