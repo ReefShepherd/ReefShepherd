@@ -8,10 +8,6 @@ on:
 permissions:
   contents: read
 
-env:
-  # Pinned sqlc release; bump deliberately and regenerate.
-  SQLC_VERSION: v1.31.1
-
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -32,26 +28,22 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
-      - run: go vet ./...
+      - run: go vet ./cmd/... ./internal/...
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.15.0
-      - run: go test ./...
+          args: ./cmd/... ./internal/...
+      - run: go test ./cmd/... ./internal/...
 
   sqlc:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Check for sqlc config
-        id: config
-        run: |
-          if [ -f sqlc.yaml ]; then echo "present=true" >> "$GITHUB_OUTPUT"; fi
-      - if: steps.config.outputs.present == 'true'
-        uses: sqlc-dev/setup-sqlc@v5
+      - uses: actions/setup-go@v7
         with:
-          sqlc-version: ${{ env.SQLC_VERSION }}
+          go-version-file: go.mod
+      # The sqlc version is pinned in the Makefile.
       - name: Generated code is up to date
-        if: steps.config.outputs.present == 'true'
         run: |
           make generate
           if [ -n "$(git status --porcelain)" ]; then
@@ -60,6 +52,8 @@ jobs:
             git diff
             exit 1
           fi
+      - name: Generated code and migration checks
+        run: make check-sql
 
   web:
     runs-on: ubuntu-latest

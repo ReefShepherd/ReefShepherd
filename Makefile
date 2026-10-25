@@ -1,11 +1,13 @@
 # Version stamped into the binary; falls back to "dev" outside a git checkout.
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X github.com/reefshepherd/reefshepherd/internal/version.version=$(VERSION)
-SQLC ?= sqlc
+# Pinned sqlc release, run through the Go toolchain so nothing has to be installed.
+SQLC_VERSION := v1.31.1
+SQLC ?= go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
 
 HAVE_WEB := $(wildcard web/package.json)
 
-.PHONY: web generate build build-go test lint fmt dev dev-web dev-status dev-stop dev-web-stop clean
+.PHONY: web generate check-sql build build-go test lint fmt dev dev-web dev-status dev-stop dev-web-stop clean
 
 # Build the web UI into internal/webui/dist; skipped until web/ exists.
 web:
@@ -15,9 +17,16 @@ else
 	cd web && { [ -d node_modules ] || npm ci; } && npm run build
 endif
 
-# Regenerate sqlc code; skipped until sqlc.yaml exists.
+# Regenerate the sqlc code in internal/db/dbgen.
 generate:
-	@if [ -f sqlc.yaml ]; then $(SQLC) generate; else echo "sqlc.yaml not found, skipping generate"; fi
+	$(SQLC) generate
+
+# Checks on the generated code and the migration files, run by CI after generate.
+check-sql:
+	python3 -B -I scripts/check_generated.py
+	python3 -B -I scripts/check_generated_test.py
+	scripts/check-migrations_test.sh
+	scripts/check-migrations.sh
 
 # One binary with the web UI embedded.
 build: web build-go
@@ -26,20 +35,23 @@ build: web build-go
 build-go:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/reefshepherd ./cmd/reefshepherd
 
+# Go packages under cmd and internal only, so Go files inside web/node_modules are never picked up.
+GO_PACKAGES := ./cmd/... ./internal/...
+
 test:
-	go test ./...
+	go test $(GO_PACKAGES)
 ifneq ($(HAVE_WEB),)
 	cd web && npm test
 endif
 
 lint:
-	golangci-lint run ./...
+	golangci-lint run $(GO_PACKAGES)
 ifneq ($(HAVE_WEB),)
 	cd web && npm run lint && npm run check
 endif
 
 fmt:
-	gofmt -w .
+	gofmt -w cmd internal
 
 # Dev servers: only one of each may run at a time (see the check before starting).
 dev:

@@ -1,0 +1,1 @@
+# SHA-256 of every frozen migration as "<sum>  <path>", checked by scripts/check-migrations.sh and added with its --freeze option.

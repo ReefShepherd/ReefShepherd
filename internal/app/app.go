@@ -9,9 +9,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/reefshepherd/reefshepherd/internal/config"
+	"github.com/reefshepherd/reefshepherd/internal/db"
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
 	"github.com/reefshepherd/reefshepherd/internal/version"
 )
@@ -22,6 +24,11 @@ const (
 	// contentSecurityPolicy allows only same-origin resources and no framing.
 	contentSecurityPolicy = "default-src 'self'; img-src 'self' data: blob:; object-src 'none'; " +
 		"base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+
+	// Names inside the data directory.
+	dbFileName     = "reefshepherd.db"
+	backupsDirName = "backups"
+	tmpDirName     = "tmp"
 
 	shutdownTimeout   = 15 * time.Second
 	readHeaderTimeout = 10 * time.Second
@@ -60,11 +67,20 @@ func (a *App) Handler() http.Handler {
 	return a.handler
 }
 
-// Run creates the data directory, listens on the configured address and serves until ctx is cancelled.
+// Run prepares the data directory and database, listens on the configured address and serves until ctx is cancelled.
 func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if err := os.MkdirAll(cfg.DataDir, 0o750); err != nil {
 		return fmt.Errorf("create data dir: %w", err)
 	}
+	database, err := openDatabase(ctx, cfg.DataDir, logger)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := database.Close(); err != nil {
+			logger.Warn("close database", slog.Any("error", err))
+		}
+	}()
 	a, err := New(cfg, logger)
 	if err != nil {
 		return err
@@ -80,6 +96,39 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		slog.Bool("dev", cfg.Dev),
 	)
 	return a.Serve(ctx, ln)
+}
+
+// openDatabase empties the tmp directory, opens the database and applies pending migrations.
+func openDatabase(ctx context.Context, dataDir string, logger *slog.Logger) (*db.DB, error) {
+	if err := clearTmp(filepath.Join(dataDir, tmpDirName)); err != nil {
+		return nil, err
+	}
+	database, err := db.Open(filepath.Join(dataDir, dbFileName))
+	if err != nil {
+		return nil, fmt.Errorf("open database: %w", err)
+	}
+	if err := database.Migrate(ctx, filepath.Join(dataDir, backupsDirName)); err != nil {
+		_ = database.Close()
+		return nil, fmt.Errorf("migrate database: %w", err)
+	}
+	schemaVersion, err := database.Version(ctx)
+	if err != nil {
+		_ = database.Close()
+		return nil, fmt.Errorf("read database version: %w", err)
+	}
+	logger.Info("database ready", slog.Int64("schema_version", schemaVersion))
+	return database, nil
+}
+
+// clearTmp removes whatever a crashed run left in the tmp directory and recreates it empty.
+func clearTmp(dir string) error {
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("clear tmp dir: %w", err)
+	}
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return fmt.Errorf("create tmp dir: %w", err)
+	}
+	return nil
 }
 
 // Serve serves on ln until ctx is cancelled, then lets in-flight requests finish for up to 15 seconds.

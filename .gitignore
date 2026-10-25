@@ -46,3 +46,6 @@ node_modules/
 /web/.svelte-kit/
 /web/test-results/
 /web/playwright-report/
+
+# Python bytecode from the repository check scripts
+__pycache__/
