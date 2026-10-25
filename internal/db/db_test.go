@@ -655,7 +655,7 @@ func TestTimestampDefaultsUseUTCFormat(t *testing.T) {
 		"tanks":                 "created_at,updated_at",
 		"user_preferences":      "updated_at",
 		"parameter_definitions": "created_at,updated_at",
-		"tank_parameters":       "updated_at",
+		"tank_parameters":       "schedule_since,updated_at",
 		"test_results":          "created_at,updated_at",
 		"dashboard_cards":       "created_at",
 	}

@@ -77,6 +77,7 @@ type TankParameter struct {
 	MonthDay      *int64
 	AnchorDate    *string
 	DueTime       string
+	ScheduleSince string
 	SortOrder     int64
 	UpdatedAt     string
 }

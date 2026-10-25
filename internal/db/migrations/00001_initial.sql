@@ -133,6 +133,8 @@ CREATE TABLE tank_parameters (
     anchor_date    TEXT,
     -- Local time of day (instance timezone) when the item becomes due.
     due_time       TEXT NOT NULL DEFAULT '09:00',
+    -- When the parameter was last switched on or given a new schedule, the baseline for its due time until it is first tested.
+    schedule_since TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     sort_order     INTEGER NOT NULL DEFAULT 0,
     updated_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     PRIMARY KEY (tank_id, parameter_id)

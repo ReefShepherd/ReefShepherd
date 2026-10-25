@@ -1,33 +1,9 @@
 package users
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 )
-
-func TestNullableDistinguishesAbsentNullAndValue(t *testing.T) {
-	var body struct {
-		A Nullable[string] `json:"a"`
-		B Nullable[string] `json:"b"`
-		C Nullable[int64]  `json:"c"`
-	}
-	if err := json.Unmarshal([]byte(`{"b":null,"c":5}`), &body); err != nil {
-		t.Fatal(err)
-	}
-	if body.A.Set || body.A.Value != nil {
-		t.Errorf("absent field = %+v", body.A)
-	}
-	if !body.B.Set || body.B.Value != nil {
-		t.Errorf("null field = %+v", body.B)
-	}
-	if !body.C.Set || body.C.Value == nil || *body.C.Value != 5 {
-		t.Errorf("value field = %+v", body.C)
-	}
-	if err := json.Unmarshal([]byte(`{"c":"five"}`), &body); err == nil {
-		t.Error("a string for an integer field was accepted")
-	}
-}
 
 func TestCleanEmail(t *testing.T) {
 	str := func(s string) *string { return &s }

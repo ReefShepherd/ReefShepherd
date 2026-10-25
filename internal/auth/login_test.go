@@ -12,6 +12,7 @@ import (
 	"github.com/reefshepherd/reefshepherd/internal/auth"
 	"github.com/reefshepherd/reefshepherd/internal/auth/password"
 	"github.com/reefshepherd/reefshepherd/internal/config"
+	"github.com/reefshepherd/reefshepherd/internal/version"
 )
 
 func TestProtectedRouteBeforeSetupSaysSetupRequired(t *testing.T) {
@@ -38,11 +39,16 @@ func TestAuthConfig(t *testing.T) {
 		SetupRequired bool     `json:"setup_required"`
 		Methods       []string `json:"methods"`
 		InstanceName  string   `json:"instance_name"`
+		Version       string   `json:"version"`
+		ModeLocked    bool     `json:"mode_locked"`
 	}
 	var got cfg
 	r := e.client().do(http.MethodGet, "/api/v1/auth/config", nil)
 	r.decode(&got)
-	if r.Code != 200 || got.Mode != "password" || !got.SetupRequired || len(got.Methods) != 1 || got.Methods[0] != "password" || got.InstanceName != "ReefShepherd" {
+	if got.ModeLocked {
+		t.Error("mode_locked is true although the environment sets no login mode")
+	}
+	if r.Code != 200 || got.Mode != "password" || !got.SetupRequired || len(got.Methods) != 1 || got.Methods[0] != "password" || got.InstanceName != "ReefShepherd" || got.Version != version.Version() {
 		t.Errorf("before setup: %d %+v", r.Code, got)
 	}
 
@@ -62,6 +68,17 @@ func TestAuthConfig(t *testing.T) {
 	e2.client().do(http.MethodGet, "/api/v1/auth/config", nil).decode(&off)
 	if off.Mode != "disabled" || len(off.Methods) != 0 || off.Methods == nil {
 		t.Errorf("disabled mode: %+v", off)
+	}
+	if !off.ModeLocked {
+		t.Error("mode_locked should be true when the environment turns login off")
+	}
+
+	// An environment value that matches the default still locks the mode.
+	e3 := newEnv(t, config.Config{AuthMode: config.AuthModePassword})
+	var on cfg
+	e3.client().do(http.MethodGet, "/api/v1/auth/config", nil).decode(&on)
+	if on.Mode != "password" || !on.ModeLocked {
+		t.Errorf("password locked by the environment: %+v", on)
 	}
 }
 

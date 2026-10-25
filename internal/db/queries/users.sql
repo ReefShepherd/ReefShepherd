@@ -101,11 +101,6 @@ SET theme = excluded.theme,
     default_tank_id = excluded.default_tank_id,
     updated_at = excluded.updated_at;
 
--- name: TankExists :one
-SELECT COUNT(*)
-FROM tanks
-WHERE id = ?;
-
 -- name: RehashPassword :execrows
 UPDATE users
 SET password_hash = ?

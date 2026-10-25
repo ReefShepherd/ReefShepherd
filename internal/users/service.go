@@ -4,7 +4,6 @@ package users
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -37,7 +36,6 @@ var themes = []string{"system", "light", "dark", "oled"}
 const (
 	maxDisplayName = 100
 	maxEmail       = 254
-	timeLayout     = "2006-01-02T15:04:05Z"
 )
 
 var (
@@ -77,27 +75,6 @@ type Me struct {
 	Instance      Instance `json:"instance"`
 }
 
-// Nullable is a JSON value that can be absent, null or set, so a request can clear a field without mistaking it for one it left out.
-type Nullable[T any] struct {
-	Set   bool
-	Value *T
-}
-
-// UnmarshalJSON marks the field as sent and keeps its value, nil for JSON null.
-func (n *Nullable[T]) UnmarshalJSON(b []byte) error {
-	n.Set = true
-	if string(b) == "null" {
-		n.Value = nil
-		return nil
-	}
-	var v T
-	if err := json.Unmarshal(b, &v); err != nil {
-		return err
-	}
-	n.Value = &v
-	return nil
-}
-
 // Service is the user logic behind the HTTP handlers; its errors are *httpx.APIError when the client caused them.
 type Service struct {
 	Deps
@@ -109,7 +86,7 @@ func NewService(deps Deps) *Service {
 	return &Service{Deps: deps, now: time.Now}
 }
 
-func (s *Service) stamp() string { return s.now().UTC().Format(timeLayout) }
+func (s *Service) stamp() string { return s.now().UTC().Format(db.TimeLayout) }
 
 func userFromRow(id int64, username, displayName string, email *string, role string, disabled, hasPassword, totp int64, created string) User {
 	return User{
@@ -189,10 +166,10 @@ func (s *Service) List(ctx context.Context) ([]User, error) {
 // UpdateMeInput are the changes a user may make to their own profile; nil or unset fields are left alone.
 type UpdateMeInput struct {
 	DisplayName   *string
-	Email         Nullable[string]
+	Email         httpx.Nullable[string]
 	Theme         *string
 	Locale        *string
-	DefaultTankID Nullable[int64]
+	DefaultTankID httpx.Nullable[int64]
 }
 
 // UpdateMe changes the user's own profile and preferences.
@@ -339,7 +316,7 @@ func createAccount(ctx context.Context, q *dbgen.Queries, in CreateInput, hash *
 // UpdateInput are the changes an admin may make to an account; nil or unset fields are left alone.
 type UpdateInput struct {
 	DisplayName *string
-	Email       Nullable[string]
+	Email       httpx.Nullable[string]
 	Role        *string
 	Disabled    *bool
 	Password    *string

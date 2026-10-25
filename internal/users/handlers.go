@@ -2,7 +2,6 @@ package users
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/reefshepherd/reefshepherd/internal/auth"
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
@@ -39,8 +38,8 @@ func (s *Service) handle(h handlerFunc) http.HandlerFunc {
 }
 
 func pathUserID(r *http.Request) (int64, error) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || id < 1 {
+	id, ok := httpx.PathID(r, "id")
+	if !ok {
 		return 0, errUserNotFound
 	}
 	return id, nil
@@ -63,11 +62,11 @@ func (s *Service) getMe(w http.ResponseWriter, r *http.Request) error {
 }
 
 type patchMeRequest struct {
-	DisplayName   *string          `json:"display_name"`
-	Email         Nullable[string] `json:"email"`
-	Theme         *string          `json:"theme"`
-	Locale        *string          `json:"locale"`
-	DefaultTankID Nullable[int64]  `json:"default_tank_id"`
+	DisplayName   *string                `json:"display_name"`
+	Email         httpx.Nullable[string] `json:"email"`
+	Theme         *string                `json:"theme"`
+	Locale        *string                `json:"locale"`
+	DefaultTankID httpx.Nullable[int64]  `json:"default_tank_id"`
 }
 
 func (s *Service) patchMe(w http.ResponseWriter, r *http.Request) error {
@@ -118,11 +117,11 @@ func (s *Service) createUser(w http.ResponseWriter, r *http.Request) error {
 }
 
 type patchUserRequest struct {
-	DisplayName *string          `json:"display_name"`
-	Email       Nullable[string] `json:"email"`
-	Role        *string          `json:"role"`
-	Disabled    *bool            `json:"disabled"`
-	Password    *string          `json:"password"`
+	DisplayName *string                `json:"display_name"`
+	Email       httpx.Nullable[string] `json:"email"`
+	Role        *string                `json:"role"`
+	Disabled    *bool                  `json:"disabled"`
+	Password    *string                `json:"password"`
 }
 
 func (s *Service) patchUser(w http.ResponseWriter, r *http.Request) error {

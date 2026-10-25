@@ -7,6 +7,7 @@ import (
 
 	"github.com/reefshepherd/reefshepherd/internal/config"
 	"github.com/reefshepherd/reefshepherd/internal/units"
+	"github.com/reefshepherd/reefshepherd/internal/version"
 )
 
 type meBody struct {
@@ -26,14 +27,14 @@ type meBody struct {
 func TestProtectedCallsSayWhenSetupIsPending(t *testing.T) {
 	a := newAPITestApp(t, config.Config{})
 	c := newClient(t, a)
-	for _, p := range []string{"/api/v1/me", "/api/v1/settings", "/api/v1/users", "/api/v1/units", "/api/v1/me/sessions", "/api/v1/nothing"} {
+	for _, p := range []string{"/api/v1/me", "/api/v1/settings", "/api/v1/users", "/api/v1/me/sessions", "/api/v1/nothing"} {
 		expect(t, c.do(http.MethodGet, p, nil), http.StatusConflict, "setup_required")
 	}
 	expect(t, c.do(http.MethodPost, "/api/v1/me/password", map[string]string{}), http.StatusConflict, "setup_required")
 
 	c.setup(nil)
 	anon := newClient(t, a)
-	for _, p := range []string{"/api/v1/me", "/api/v1/settings", "/api/v1/users", "/api/v1/units", "/api/v1/me/sessions", "/api/v1/nothing"} {
+	for _, p := range []string{"/api/v1/me", "/api/v1/settings", "/api/v1/users", "/api/v1/me/sessions", "/api/v1/nothing"} {
 		expect(t, anon.do(http.MethodGet, p, nil), http.StatusUnauthorized, "unauthorized")
 	}
 }
@@ -44,12 +45,18 @@ func TestPublicRoutesWorkWithoutASession(t *testing.T) {
 	rec := c.do(http.MethodGet, "/api/v1/auth/config", nil)
 	expectStatus(t, rec, http.StatusOK)
 	var cfg struct {
-		SetupRequired bool `json:"setup_required"`
+		SetupRequired bool   `json:"setup_required"`
+		Version       string `json:"version"`
 	}
 	decodeBody(t, rec, &cfg)
 	if !cfg.SetupRequired {
 		t.Error("setup_required should be true on a fresh instance")
 	}
+	if cfg.Version != version.Version() {
+		t.Errorf("version = %q, want %q", cfg.Version, version.Version())
+	}
+	// The unit catalog is public so the setup wizard can offer units before anyone exists.
+	expectStatus(t, c.do(http.MethodGet, "/api/v1/units", nil), http.StatusOK)
 	c.setup(nil)
 	newClient(t, a).do(http.MethodGet, "/api/v1/auth/config", nil)
 	rec = newClient(t, a).do(http.MethodGet, "/api/v1/auth/config", nil)

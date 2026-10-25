@@ -336,19 +336,6 @@ func (q *Queries) SetUserPassword(ctx context.Context, arg SetUserPasswordParams
 	return err
 }
 
-const tankExists = `-- name: TankExists :one
-SELECT COUNT(*)
-FROM tanks
-WHERE id = ?
-`
-
-func (q *Queries) TankExists(ctx context.Context, id int64) (int64, error) {
-	row := q.db.QueryRowContext(ctx, tankExists, id)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const updateUserAccount = `-- name: UpdateUserAccount :exec
 UPDATE users
 SET display_name = ?, email = ?, role = ?, disabled = ?, updated_at = ?

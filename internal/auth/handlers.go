@@ -13,6 +13,7 @@ import (
 	"github.com/reefshepherd/reefshepherd/internal/db"
 	"github.com/reefshepherd/reefshepherd/internal/db/dbgen"
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
+	"github.com/reefshepherd/reefshepherd/internal/version"
 )
 
 // PublicRoutes registers the endpoints that work without a session.
@@ -49,6 +50,9 @@ type configResponse struct {
 	SetupRequired bool     `json:"setup_required"`
 	Methods       []string `json:"methods"`
 	InstanceName  string   `json:"instance_name"`
+	Version       string   `json:"version"`
+	// ModeLocked is true when the server environment decides the login mode, so the web setting cannot change it.
+	ModeLocked bool `json:"mode_locked"`
 }
 
 func (s *Service) getConfig(w http.ResponseWriter, r *http.Request) error {
@@ -69,7 +73,7 @@ func (s *Service) getConfig(w http.ResponseWriter, r *http.Request) error {
 	if mode == config.AuthModePassword {
 		methods = append(methods, MethodPassword)
 	}
-	httpx.WriteJSON(w, http.StatusOK, configResponse{Mode: mode, SetupRequired: setup, Methods: methods, InstanceName: name})
+	httpx.WriteJSON(w, http.StatusOK, configResponse{Mode: mode, SetupRequired: setup, Methods: methods, InstanceName: name, Version: version.Version(), ModeLocked: s.Config.AuthMode != ""})
 	return nil
 }
 

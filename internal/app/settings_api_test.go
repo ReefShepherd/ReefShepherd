@@ -100,7 +100,11 @@ func TestUnitsCatalog(t *testing.T) {
 			t.Errorf("catalog = %+v", catalog)
 		}
 	}
-	expect(t, newClient(t, a).do(http.MethodGet, "/api/v1/units", nil), http.StatusUnauthorized, "unauthorized")
+	anon := newClient(t, a).do(http.MethodGet, "/api/v1/units", nil)
+	expectStatus(t, anon, http.StatusOK)
+	if got := anon.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("anonymous catalog Cache-Control = %q", got)
+	}
 }
 
 func TestTurningLoginOffNeedsTheAdminPassword(t *testing.T) {

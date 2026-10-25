@@ -33,9 +33,6 @@ const (
 	touchInterval = time.Hour
 	// mfaWindow is how long a password-verified session may wait for its second step.
 	mfaWindow = 5 * time.Minute
-
-	// timeLayout is the UTC RFC 3339 form every timestamp column uses.
-	timeLayout = "2006-01-02T15:04:05Z"
 )
 
 // Settings is what the package reads from the instance settings; *settings.Store satisfies it.
@@ -71,9 +68,9 @@ func NewService(deps Deps) *Service {
 	return s
 }
 
-func formatTime(t time.Time) string { return t.UTC().Format(timeLayout) }
+func formatTime(t time.Time) string { return t.UTC().Format(db.TimeLayout) }
 
-func parseTime(s string) (time.Time, error) { return time.Parse(timeLayout, s) }
+func parseTime(s string) (time.Time, error) { return time.Parse(db.TimeLayout, s) }
 
 // EffectiveMode is the login mode in force: the environment override when set, else the stored setting.
 func (s *Service) EffectiveMode(ctx context.Context) (string, error) {
