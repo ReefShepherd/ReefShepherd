@@ -144,7 +144,7 @@ test('a new dashboard shows the default cards with values, ranges and a tests-du
   await expect(nitrate).toContainText('Out of range');
   await expect(slot(page, 'Alkalinity')).toContainText('No tests logged yet');
 
-  await expect(page.getByRole('link', { name: 'pH' })).toHaveAttribute(
+  await expect(page.getByRole('link', { name: 'pH', exact: true })).toHaveAttribute(
     'href',
     new RegExp(`/tanks/${tankId}/charts/\\d+$`)
   );

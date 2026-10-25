@@ -1,0 +1,43 @@
+[Unit]
+Description=ReefShepherd reef aquarium log
+Documentation=https://github.com/ReefShepherd/ReefShepherd
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=reefshepherd
+Group=reefshepherd
+
+# Creates /var/lib/reefshepherd owned by the service user and passes it to the app as $STATE_DIRECTORY.
+StateDirectory=reefshepherd
+StateDirectoryMode=0750
+UMask=0027
+
+# The leading dash makes the file optional; see deploy/env/reefshepherd.env.example for the keys.
+EnvironmentFile=-/etc/reefshepherd/reefshepherd.env
+ExecStart=/usr/local/bin/reefshepherd serve
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+# Sandboxing: the service only needs to write its state directory and use the network.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

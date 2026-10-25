@@ -3,6 +3,7 @@ package password
 import (
 	"context"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -159,5 +160,21 @@ func TestSpendVerifyTimeRunsAHash(t *testing.T) {
 	defer cancel()
 	if err := h.SpendVerifyTime(ctx, "anything"); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("SpendVerifyTime with busy slots = %v, want a deadline error", err)
+	}
+}
+
+func TestHashReturnsItsWorkingMemoryToTheSystem(t *testing.T) {
+	const memoryKiB = 32 * 1024
+	h := NewHasher(Params{Time: 1, MemoryKiB: memoryKiB, Threads: 1})
+	if _, err := h.Hash(t.Context(), "a password that is long enough"); err != nil {
+		t.Fatal(err)
+	}
+	var m runtime.MemStats
+	// A collection first, so the block counts as free heap whether or not the hasher returned it.
+	runtime.GC()
+	runtime.ReadMemStats(&m)
+	// Free heap pages the runtime still holds resident; the 32 MiB block must not be among them.
+	if retained := (m.HeapIdle - m.HeapReleased) / 1024; retained > memoryKiB/2 {
+		t.Errorf("%d KiB of free heap is still resident after hashing", retained)
 	}
 }

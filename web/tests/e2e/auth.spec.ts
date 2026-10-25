@@ -29,6 +29,8 @@ test.afterAll(async () => {
 });
 
 async function signOutEverywhere(page: Page) {
+  // Let the open page finish its requests first, or a late 401 starts its own redirect and aborts the navigation below.
+  await page.waitForLoadState('networkidle');
   await context.clearCookies();
   await page.goto('/login');
 }
@@ -56,7 +58,7 @@ test('first-run setup creates the instance and signs the administrator in', asyn
   await page.getByRole('button', { name: 'Next' }).click();
 
   // A short password is refused before anything is sent.
-  await page.getByLabel('Username').fill(username);
+  await page.getByLabel('Username', { exact: true }).fill(username);
   await page.getByLabel('Password', { exact: true }).fill('too short');
   await page.getByLabel('Repeat the password').fill('too short');
   await page.getByRole('button', { name: 'Finish setup' }).click();
@@ -211,10 +213,11 @@ test('turning login back on sends the browser to sign in', async () => {
   await page.goto('/settings/instance');
   await page.getByRole('radio', { name: /Require a login/ }).check();
   await page.getByRole('button', { name: 'Save changes' }).click();
-  await expect(page).toHaveURL(/\/login$/);
+  // The page the browser was on is remembered, so signing in brings it back there.
+  await expect(page).toHaveURL(/\/login\?next=%2Fsettings%2Finstance$/);
 
   await signInWithPassword(page);
-  await expect(page).toHaveURL(home);
+  await expect(page).toHaveURL(/\/settings\/instance$/);
 });
 
 test('signing in returns to the page that asked for it, and a signed-in user skips the form', async () => {

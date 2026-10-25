@@ -28,8 +28,10 @@ check-sql:
 	scripts/check-migrations_test.sh
 	scripts/check-migrations.sh
 
-# One binary with the web UI embedded.
-build: web build-go
+# One binary with the web UI embedded; the steps are sequenced explicitly so `make -j` cannot embed a half-written UI.
+build:
+	$(MAKE) web
+	$(MAKE) build-go
 
 # Go binary only, with whatever UI is currently in internal/webui/dist.
 build-go:

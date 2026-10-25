@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -93,7 +94,11 @@ func (h *Hasher) acquire(ctx context.Context) error {
 	}
 }
 
-func (h *Hasher) release() { <-h.sem }
+// release hands the slot back after returning the finished hash's working memory, which the runtime would otherwise keep resident for minutes.
+func (h *Hasher) release() {
+	debug.FreeOSMemory()
+	<-h.sem
+}
 
 // Hash returns the PHC string of plain with a fresh random salt.
 func (h *Hasher) Hash(ctx context.Context, plain string) (string, error) {

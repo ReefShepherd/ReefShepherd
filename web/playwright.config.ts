@@ -9,9 +9,10 @@ export default defineConfig({
   testDir: './tests/e2e',
   fullyParallel: false,
   workers: 1,
-  reporter: [['list']],
+  reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     baseURL: `http://127.0.0.1:${port}`,
+    trace: 'retain-on-failure',
     // Unset uses Playwright's own browser; on this machine set PLAYWRIGHT_CHROMIUM_PATH=/usr/bin/chromium.
     launchOptions: { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH || undefined }
   },
