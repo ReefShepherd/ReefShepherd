@@ -1,10 +1,15 @@
 package webui
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -157,6 +162,7 @@ func TestPrecompressedSelection(t *testing.T) {
 		{"br only", js, "br", "br", "js-br"},
 		{"br preferred over gzip", js, "gzip, deflate, br", "br", "js-br"},
 		{"refused with q=0", js, "br;q=0, gzip", "gzip", "js-gz"},
+		{"refused with Q=0", js, "br;Q=0, gzip", "gzip", "js-gz"},
 		{"unrelated coding", js, "deflate, zstd", "", "console.log(1)"},
 		{"no sibling for the coding", "/favicon.svg", "br", "", "<svg/>"},
 		{"sibling for gzip only", "/favicon.svg", "br, gzip", "gzip", "svg-gz"},
@@ -334,11 +340,85 @@ func TestMIMETypes(t *testing.T) {
 	}
 }
 
+// diskFS resolves names against a directory without validating them, like a naive file server, and records every name it is asked for.
+type diskFS struct {
+	root string
+	seen []string
+}
+
+func (d *diskFS) Open(name string) (fs.File, error) {
+	d.seen = append(d.seen, name)
+	return os.Open(filepath.Join(d.root, name))
+}
+
+// traversalSite lays out a served directory with a secret file one level above it.
+func traversalSite(t *testing.T) *diskFS {
+	t.Helper()
+	parent := t.TempDir()
+	root := filepath.Join(parent, "site")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		filepath.Join(parent, "secret.txt"): "root:secret",
+		filepath.Join(root, "200.html"):     shellBody,
+		filepath.Join(root, "favicon.svg"):  "<svg/>",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(name, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return &diskFS{root: root}
+}
+
 func TestPathTraversalStaysInsideTheFS(t *testing.T) {
-	for _, target := range []string{"/../../etc/passwd", "/..%2f..%2fetc/passwd", "/_app/../../etc/passwd"} {
-		rec := get(NewHandler(builtUI()), http.MethodGet, target)
+	site := traversalSite(t)
+	h := NewHandler(site)
+	for _, target := range []string{"/../secret.txt", "/..%2fsecret.txt", "/_app/../../secret.txt", "/a/b/../../../secret.txt"} {
+		rec := get(h, http.MethodGet, target)
 		if strings.Contains(rec.Body.String(), "root:") {
-			t.Errorf("%s escaped the filesystem", target)
+			t.Errorf("%s escaped the filesystem: %q", target, rec.Body.String())
+		}
+	}
+	for _, name := range site.seen {
+		if !fs.ValidPath(name) {
+			t.Errorf("filesystem asked for the invalid name %q", name)
+		}
+	}
+}
+
+func TestIsFileRejectsNamesOutsideTheFS(t *testing.T) {
+	h := &handler{fsys: traversalSite(t)}
+	for _, name := range []string{"../secret.txt", "favicon.svg/../../secret.txt", "/favicon.svg", "", "."} {
+		if h.isFile(name) {
+			t.Errorf("isFile(%q) = true", name)
+		}
+	}
+	if !h.isFile("favicon.svg") {
+		t.Error("isFile(favicon.svg) = false")
+	}
+}
+
+func TestMissingShellPolicyIsWarnedAboutOnce(t *testing.T) {
+	cases := []struct {
+		name string
+		fsys fs.FS
+		warn bool
+	}{
+		{"shell without a policy", fstest.MapFS{"200.html": {Data: []byte("<html></html>")}}, true},
+		{"shell with a policy", builtUI(), false},
+		{"ui not built", fstest.MapFS{".gitkeep": {}}, false},
+	}
+	for _, c := range cases {
+		var buf bytes.Buffer
+		newHandler(c.fsys, slog.New(slog.NewTextHandler(&buf, nil)))
+		out := buf.String()
+		if c.warn != strings.Contains(out, "level=WARN") || c.warn != strings.Contains(out, "content security policy") {
+			t.Errorf("%s: warn=%v, log = %q", c.name, c.warn, out)
+		}
+		if n := strings.Count(out, "\n"); n > 1 {
+			t.Errorf("%s: %d log lines", c.name, n)
 		}
 	}
 }
@@ -354,6 +434,10 @@ func TestAcceptsEncoding(t *testing.T) {
 		{"gzip, br", "br", true},
 		{"gzip;q=0.5, br;q=1", "br", true},
 		{"br;q=0", "br", false},
+		{"br;Q=0", "br", false},
+		{"BR; Q=0.0", "br", false},
+		{"gzip, br;Q=0", "br", false},
+		{"br;Q=0.1", "br", true},
 		{"br; q=0.0", "br", false},
 		{"br;q=0.1", "br", true},
 		{"gzip", "br", false},

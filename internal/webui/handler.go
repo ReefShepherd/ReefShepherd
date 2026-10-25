@@ -7,6 +7,7 @@ import (
 	"html"
 	"io"
 	"io/fs"
+	"log/slog"
 	"mime"
 	"net/http"
 	"path"
@@ -48,8 +49,12 @@ func init() {
 
 // NewHandler serves the UI files in fsys: real files as they are (precompressed when the client accepts it),
 // hashed assets with a long cache, and every other extensionless non-API path with the single-page-app shell
-// (or a placeholder when the UI is not built).
+// (or a placeholder when the UI is not built), warning once when the shell has no policy.
 func NewHandler(fsys fs.FS) http.Handler {
+	return newHandler(fsys, slog.Default())
+}
+
+func newHandler(fsys fs.FS, logger *slog.Logger) *handler {
 	h := &handler{fsys: fsys}
 	if shell, err := fs.ReadFile(fsys, shellFile); err == nil {
 		h.built = true
@@ -57,6 +62,8 @@ func NewHandler(fsys fs.FS) http.Handler {
 		if m := metaCSP.FindSubmatch(shell); m != nil {
 			// frame-ancestors is not allowed in a meta element, so it is added to the header form.
 			h.csp = html.UnescapeString(string(m[1])) + "; frame-ancestors 'none'"
+		} else {
+			logger.Warn("web UI shell has no content security policy meta tag, so pages are served without one", slog.String("file", shellFile))
 		}
 	}
 	return h
@@ -72,6 +79,7 @@ type handler struct {
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
+	// The app router answers /api/ first; this keeps the handler from serving files or the shell under /api when mounted on its own.
 	if name == "api" || strings.HasPrefix(name, "api/") {
 		httpx.WriteError(w, httpx.NotFound("no such API endpoint"))
 		return
@@ -197,8 +205,9 @@ func acceptsEncoding(header, coding string) bool {
 			continue
 		}
 		for _, param := range fields[1:] {
-			if q, ok := strings.CutPrefix(strings.TrimSpace(param), "q="); ok {
-				if v, err := strconv.ParseFloat(q, 64); err == nil && v <= 0 {
+			param = strings.TrimSpace(param)
+			if len(param) > 2 && strings.EqualFold(param[:2], "q=") {
+				if v, err := strconv.ParseFloat(param[2:], 64); err == nil && v <= 0 {
 					return false
 				}
 			}
