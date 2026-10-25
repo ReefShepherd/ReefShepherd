@@ -5,7 +5,7 @@
 
   let { card, bar }: { card: Card; bar?: Snippet } = $props();
 
-  const Body = $derived(registry[card.card_type]?.component);
+  const Body = $derived(registry[card.card_type]?.default);
 </script>
 
 <div class="frame" class:editing={bar}>

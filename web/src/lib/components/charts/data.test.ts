@@ -1,55 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import type { SeriesPoint } from '#lib/api/charts.js';
-import {
-  bandSpan,
-  flaggedPoints,
-  lowerBound,
-  outOfRange,
-  sparkPoints,
-  toChartPoints,
-  xRange,
-  yRange
-} from './data.js';
+import { bandSpan, flaggedPoints, lowerBound, toChartPoints, xRange, yRange } from './data.js';
 
-const point = (id: number, at: string, value: number, note = ''): SeriesPoint => ({
+const point = (id: number, at: string, value: number, note = '', inRange = true): SeriesPoint => ({
   result_id: id,
   measured_at: at,
   value,
-  in_range: true,
+  in_range: inRange,
   note
-});
-
-describe('outOfRange', () => {
-  it('judges a two-sided range, inclusive at both limits', () => {
-    expect(outOfRange(7.9, 8, 8.5)).toBe(true);
-    expect(outOfRange(8.6, 8, 8.5)).toBe(true);
-    expect(outOfRange(8, 8, 8.5)).toBe(false);
-    expect(outOfRange(8.5, 8, 8.5)).toBe(false);
-  });
-
-  it('judges one-sided ranges and treats zero as a real limit', () => {
-    expect(outOfRange(0.5, 1, null)).toBe(true);
-    expect(outOfRange(1000, 1, null)).toBe(false);
-    expect(outOfRange(5, null, 3)).toBe(true);
-    expect(outOfRange(-5, null, 3)).toBe(false);
-    expect(outOfRange(-0.1, 0, null)).toBe(true);
-    expect(outOfRange(0.1, null, 0)).toBe(true);
-  });
-
-  it('never flags anything without a range', () => {
-    expect(outOfRange(123, null, null)).toBe(false);
-  });
 });
 
 describe('toChartPoints', () => {
   it('converts RFC 3339 timestamps to unix seconds and carries each reading note', () => {
     const out = toChartPoints([
       point(1, '2026-03-01T12:00:00Z', 8.1),
-      point(2, '2026-03-02T12:00:30Z', 8.4, 'after water change')
+      point(2, '2026-03-02T12:00:30Z', 8.4, 'after water change', false)
     ]);
     expect(out).toEqual([
-      { t: Date.UTC(2026, 2, 1, 12) / 1000, v: 8.1, note: '' },
-      { t: Date.UTC(2026, 2, 2, 12, 0, 30) / 1000, v: 8.4, note: 'after water change' }
+      { t: Date.UTC(2026, 2, 1, 12) / 1000, v: 8.1, note: '', inRange: true },
+      {
+        t: Date.UTC(2026, 2, 2, 12, 0, 30) / 1000,
+        v: 8.4,
+        note: 'after water change',
+        inRange: false
+      }
     ]);
   });
 
@@ -59,27 +33,16 @@ describe('toChartPoints', () => {
   });
 });
 
-describe('sparkPoints', () => {
-  it('returns [seconds, value] pairs in order', () => {
-    expect(
-      sparkPoints([point(1, '1970-01-01T00:00:10Z', 3), point(2, '1970-01-01T00:00:20Z', 4)])
-    ).toEqual([
-      [10, 3],
-      [20, 4]
-    ]);
-  });
-});
-
 describe('flaggedPoints', () => {
-  it('lists out-of-range readings newest first with their index', () => {
+  it('lists the readings the server marked out of range, newest first, with their index', () => {
     const points = [
-      { t: 1, v: 9, note: 'high' },
-      { t: 2, v: 8.2, note: '' },
-      { t: 3, v: 7, note: 'low' }
+      { t: 1, v: 9, note: 'high', inRange: false },
+      { t: 2, v: 8.2, note: '', inRange: true },
+      { t: 3, v: 7, note: 'low', inRange: false }
     ];
-    expect(flaggedPoints(points, 8, 8.5).map((f) => f.index)).toEqual([2, 0]);
-    expect(flaggedPoints(points, 8, 8.5)[0].point.note).toBe('low');
-    expect(flaggedPoints(points, null, null)).toEqual([]);
+    expect(flaggedPoints(points).map((f) => f.index)).toEqual([2, 0]);
+    expect(flaggedPoints(points)[0].point.note).toBe('low');
+    expect(flaggedPoints(points.map((p) => ({ ...p, inRange: true })))).toEqual([]);
   });
 });
 

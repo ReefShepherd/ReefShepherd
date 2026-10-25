@@ -1,6 +1,4 @@
 <script lang="ts">
-  import { errorText } from '#lib/api/error-text.js';
-  import { fieldText } from '#lib/api/field-errors.js';
   import { paramsApi, type TestResult } from '#lib/api/params.js';
   import Alert from '#lib/components/forms/Alert.svelte';
   import ConfirmButton from '#lib/components/forms/ConfirmButton.svelte';
@@ -9,6 +7,9 @@
   import { focusFirstField, focusFirstInvalid } from '#lib/dom.js';
   import { formatDateTime } from '#lib/format/datetime.js';
   import { formatValue } from '#lib/format/number.js';
+  import { hasErrors, type FieldErrors } from '#lib/forms/codes.js';
+  import { guarded, type GuardHooks } from '#lib/forms/guarded.js';
+  import { fieldTexts } from '#lib/forms/serverErrors.js';
   import { m } from '#lib/paraglide/messages.js';
   import { draftFromResult, resultChanges } from '#lib/results/edit.js';
 
@@ -27,7 +28,8 @@
   // The draft is rebuilt from the saved result each time editing starts.
   // svelte-ignore state_referenced_locally
   let draft = $state(draftFromResult(result, decimals, timeZone));
-  let errors = $state<{ value?: string; note?: string; time?: string }>({});
+  let errors = $state<FieldErrors>({});
+  const texts = $derived(fieldTexts(errors));
   let failure = $state('');
   let busy = $state(false);
   let form = $state<HTMLFormElement>();
@@ -39,47 +41,40 @@
     editing = true;
   }
 
+  const hooks: GuardHooks = {
+    failure: (text) => (failure = text),
+    busy: (b) => (busy = b),
+    fields: (f) => (errors = f),
+    shown: ['value', 'note', 'measured_at'],
+    form: () => form
+  };
+
   async function save(event: SubmitEvent) {
     event.preventDefault();
     failure = '';
     const edit = resultChanges(result, draft, timeZone);
-    errors = {
-      value: edit.problems.value ? m.value_invalid_number() : undefined,
-      time: edit.problems.measuredAt ? m.tests_time_invalid() : undefined
-    };
-    if (Object.values(errors).some(Boolean)) return focusFirstInvalid(form);
+    errors = edit.errors;
+    if (hasErrors(errors)) return focusFirstInvalid(form);
     if (Object.keys(edit.changes).length === 0) {
       editing = false;
       return;
     }
 
-    busy = true;
-    try {
+    await guarded(async () => {
       const saved = await paramsApi.updateResult(result.id, edit.changes);
       editing = false;
       onupdated(saved);
-    } catch (e) {
-      errors = {
-        value: fieldText(e, 'value'),
-        note: fieldText(e, 'note'),
-        time: fieldText(e, 'measured_at')
-      };
-      if (!Object.values(errors).some(Boolean)) failure = errorText(e);
-      await focusFirstInvalid(form);
-    } finally {
-      busy = false;
-    }
+    }, hooks);
   }
 
-  async function remove() {
-    failure = '';
-    try {
-      await paramsApi.removeResult(result.id);
-      ondeleted(result.id);
-    } catch (e) {
-      failure = errorText(e);
-    }
-  }
+  const remove = () =>
+    guarded(
+      async () => {
+        await paramsApi.removeResult(result.id);
+        ondeleted(result.id);
+      },
+      { failure: (text) => (failure = text) }
+    );
 
   const shownValue = $derived(formatValue(result.value, result.unit_label, decimals));
 </script>
@@ -95,18 +90,18 @@
         label={m.tests_value_for({ name: result.parameter_name })}
         bind:value={draft.value}
         unit={result.unit_label}
-        error={errors.value}
+        error={texts.value}
       />
       <TextField
         label={m.tests_time()}
         type="datetime-local"
         bind:value={draft.measuredAt}
-        error={errors.time}
+        error={texts.measured_at}
       />
       <TextField
         label={m.tests_note()}
         bind:value={draft.note}
-        error={errors.note}
+        error={texts.note}
         autocomplete="off"
       />
       <div class="row">

@@ -1,11 +1,10 @@
-import { isHttpError } from '@sveltejs/kit';
 import { describe, expect, it } from 'vitest';
-import { parseTankId, tankIdFromParams, tankPath } from './tank-id.js';
+import { parseId, tankPath } from './tank-id.js';
 
-describe('parseTankId', () => {
+describe('parseId', () => {
   it('reads a positive whole number', () => {
-    expect(parseTankId('1')).toBe(1);
-    expect(parseTankId('42')).toBe(42);
+    expect(parseId('1')).toBe(1);
+    expect(parseId('42')).toBe(42);
   });
 
   it('rejects anything else', () => {
@@ -24,25 +23,7 @@ describe('parseTankId', () => {
       ' 3',
       '99999999999999999999'
     ]) {
-      expect(parseTankId(value), String(value)).toBeNull();
-    }
-  });
-});
-
-describe('tankIdFromParams', () => {
-  it('returns the id as a number', () => {
-    expect(tankIdFromParams({ id: '12' })).toBe(12);
-  });
-
-  it('throws a 404 for a missing or malformed id', () => {
-    for (const params of [{}, { id: 'abc' }, { id: '0' }, { id: '2.5' }]) {
-      let thrown: unknown;
-      try {
-        tankIdFromParams(params);
-      } catch (e) {
-        thrown = e;
-      }
-      expect(isHttpError(thrown, 404), JSON.stringify(params)).toBe(true);
+      expect(parseId(value), String(value)).toBeNull();
     }
   });
 });

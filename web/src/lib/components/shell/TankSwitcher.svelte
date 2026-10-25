@@ -1,7 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
-  import { parseTankId } from '#lib/api/tank-id.js';
+  import { parseId } from '#lib/api/tank-id.js';
   import { m } from '#lib/paraglide/messages.js';
   import { currentTank } from '#lib/tank/current-tank.svelte.js';
   import { retargetPath } from '#lib/tank/selection.js';
@@ -16,7 +16,7 @@
   const active = $derived(tankList.active);
 
   function choose(event: Event) {
-    const id = parseTankId((event.currentTarget as HTMLSelectElement).value);
+    const id = parseId((event.currentTarget as HTMLSelectElement).value);
     if (id === null) return;
     currentTank.set(id);
     // A page that belongs to one tank follows the switch instead of showing the old tank.

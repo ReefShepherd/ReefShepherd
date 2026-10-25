@@ -68,7 +68,7 @@ describe('abort signals', () => {
       createDashboardApi(api).get(1, signal),
       createDashboardApi(api).save(1, { cards: [] }, signal),
       createDashboardApi(api).reset(1, signal),
-      createChartsApi(api).series(1, '2', null, signal)
+      createChartsApi(api).series(1, 2, null, signal)
     ];
     await Promise.all(all);
 

@@ -1,20 +1,20 @@
 <script lang="ts">
-  import { errorText } from '#lib/api/error-text.js';
-  import { fieldText } from '#lib/api/field-errors.js';
-  import { guarded } from '#lib/api/guarded.js';
   import { usersApi, type User } from '#lib/api/users.js';
+  import Alert from '#lib/components/forms/Alert.svelte';
+  import ConfirmButton from '#lib/components/forms/ConfirmButton.svelte';
+  import SelectField from '#lib/components/forms/SelectField.svelte';
+  import TextField from '#lib/components/forms/TextField.svelte';
+  import { focusFirstField, focusFirstInvalid } from '#lib/dom.js';
+  import { hasErrors, type FieldErrors } from '#lib/forms/codes.js';
+  import { guarded, type GuardHooks } from '#lib/forms/guarded.js';
+  import { fieldTexts } from '#lib/forms/serverErrors.js';
   import {
     collectErrors,
     passwordLimits,
     validateDisplayName,
     validateNewPassword,
     validateOptionalEmail
-  } from '#lib/auth/validation.js';
-  import Alert from '#lib/components/forms/Alert.svelte';
-  import ConfirmButton from '#lib/components/forms/ConfirmButton.svelte';
-  import SelectField from '#lib/components/forms/SelectField.svelte';
-  import TextField from '#lib/components/forms/TextField.svelte';
-  import { focusFirstField, focusFirstInvalid } from '#lib/dom.js';
+  } from '#lib/forms/validation.js';
   import { m } from '#lib/paraglide/messages.js';
   import { draftFromUser, userChanges, userLabel } from '#lib/users/rules.js';
 
@@ -29,13 +29,12 @@
 
   let { user, isSelf, isLastAdmin, onchanged, onremoved }: Props = $props();
 
-  type Field = 'displayName' | 'email' | 'password';
-
   let editing = $state(false);
   // The draft is rebuilt from the current user each time editing starts.
   // svelte-ignore state_referenced_locally
   let draft = $state(draftFromUser(user));
-  let errors = $state<Partial<Record<Field, string>>>({});
+  let errors = $state<FieldErrors>({});
+  const texts = $derived(fieldTexts(errors));
   let failure = $state('');
   let busy = $state(false);
   let form = $state<HTMLFormElement>();
@@ -43,6 +42,14 @@
   const name = $derived(userLabel(user));
   const roleLocked = $derived(isLastAdmin);
   const disableLocked = $derived(isSelf || isLastAdmin);
+
+  const hooks: GuardHooks = {
+    failure: (text) => (failure = text),
+    busy: (b) => (busy = b),
+    fields: (f) => (errors = f),
+    shown: ['display_name', 'email', 'password'],
+    form: () => form
+  };
 
   function startEditing() {
     draft = draftFromUser(user);
@@ -55,33 +62,22 @@
     event.preventDefault();
     failure = '';
     errors = collectErrors({
-      displayName: validateDisplayName(draft.displayName),
+      display_name: validateDisplayName(draft.displayName),
       email: validateOptionalEmail(draft.email),
       password: draft.password === '' ? null : validateNewPassword(draft.password)
     });
-    if (Object.keys(errors).length > 0) return focusFirstInvalid(form);
+    if (hasErrors(errors)) return focusFirstInvalid(form);
 
     const changes = userChanges(user, draft);
     if (Object.keys(changes).length === 0) {
       editing = false;
       return;
     }
-    busy = true;
-    try {
+    await guarded(async () => {
       const saved = await usersApi.update(user.id, changes);
       editing = false;
       onchanged(saved, m.users_saved({ name: userLabel(saved) }));
-    } catch (e) {
-      errors = {
-        displayName: fieldText(e, 'display_name'),
-        email: fieldText(e, 'email'),
-        password: fieldText(e, 'password')
-      };
-      if (!Object.values(errors).some(Boolean)) failure = errorText(e);
-      await focusFirstInvalid(form);
-    } finally {
-      busy = false;
-    }
+    }, hooks);
   }
 
   const guard = (action: () => Promise<void>) =>
@@ -124,14 +120,14 @@
       <TextField
         label={m.users_display_name()}
         bind:value={draft.displayName}
-        error={errors.displayName}
+        error={texts.display_name}
         autocomplete="off"
       />
       <TextField
         label={m.users_email()}
         type="email"
         bind:value={draft.email}
-        error={errors.email}
+        error={texts.email}
         autocomplete="off"
       />
       <SelectField
@@ -156,7 +152,7 @@
         type="password"
         hint={m.password_hint({ min: passwordLimits.min })}
         bind:value={draft.password}
-        error={errors.password}
+        error={texts.password}
         autocomplete="new-password"
       />
       <div class="row">

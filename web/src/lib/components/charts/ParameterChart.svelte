@@ -7,13 +7,13 @@
   import { m } from '#lib/paraglide/messages.js';
   import { getLocale } from '#lib/paraglide/runtime.js';
   import { session } from '#lib/session/session.svelte.js';
-  import { flaggedPoints, outOfRange, toChartPoints } from './data.js';
+  import { flaggedPoints, toChartPoints } from './data.js';
   import { rangeIds, rangeStart, type RangeId } from './range.js';
   import { chart } from './uplot.js';
 
   interface Props {
     tankId: number;
-    parameterId: string;
+    parameterId: number;
     range?: RangeId;
     /** Called with the parameter's name once its readings have loaded. */
     onloaded?: (name: string) => void;
@@ -55,7 +55,7 @@
   const points = $derived(series ? toChartPoints(series.points) : []);
   const low = $derived(series?.range.low ?? null);
   const high = $derived(series?.range.high ?? null);
-  const flagged = $derived(flaggedPoints(points, low, high));
+  const flagged = $derived(flaggedPoints(points));
   const chosen = $derived(selected === null ? null : (points[selected] ?? null));
 
   const showValue = (v: number) => formatValue(v, series?.unit_label, series?.decimals ?? 1);
@@ -132,8 +132,8 @@
 
       <div class="detail" aria-live="polite">
         {#if chosen}
-          <strong class:flagged={outOfRange(chosen.v, low, high)}>{showValue(chosen.v)}</strong>
-          {#if outOfRange(chosen.v, low, high)}
+          <strong class:flagged={!chosen.inRange}>{showValue(chosen.v)}</strong>
+          {#if !chosen.inRange}
             <span class="badge warning">{m.charts_out_of_range()}</span>
           {/if}
           <span>{showTime(chosen.t)}</span>

@@ -24,7 +24,7 @@ export interface Series {
 export function createChartsApi(api: Api) {
   return {
     /** Readings oldest first; from is inclusive and null means the whole history. */
-    series: (tankId: number, parameterId: string, from: Date | null, signal?: AbortSignal) =>
+    series: (tankId: number, parameterId: number, from: Date | null, signal?: AbortSignal) =>
       api.get<Series>(tankPath(tankId, 'parameters', parameterId, 'series'), {
         signal,
         query: { from: from?.toISOString() }

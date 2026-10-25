@@ -1,5 +1,12 @@
 import type { NewParameter, ParameterChanges, ParameterDefinition } from '#lib/api/params.js';
 import { decimalText, parseDecimal, parseWholeNumber } from '#lib/format/decimal.js';
+import type { FieldCode, FieldErrors } from '#lib/forms/codes.js';
+import {
+  collectErrors,
+  validateLimitPair,
+  validateMaxLength,
+  validateName
+} from '#lib/forms/validation.js';
 
 export const parameterNameMax = 60;
 export const unitLabelMax = 16;
@@ -28,40 +35,29 @@ export function draftFromDefinition(def: ParameterDefinition | undefined): Defin
   };
 }
 
-export interface DefinitionProblems {
-  name?: 'required' | 'too_long';
-  unitLabel?: 'too_long';
-  low?: 'invalid_number';
-  high?: 'invalid_number';
-  range?: 'low_above_high';
-  intervalDays?: 'invalid_interval';
-}
+const intervalCode = (text: string): FieldCode | null => {
+  if (text.trim() === '') return null;
+  const days = parseWholeNumber(text);
+  if (days === null) return 'invalid';
+  return days < 1 || days > maxTestInterval ? 'out_of_range' : null;
+};
 
-const length = (text: string) => [...text].length;
-
-export function definitionProblems(draft: DefinitionDraft): DefinitionProblems {
-  const problems: DefinitionProblems = {};
-  const name = draft.name.trim();
-  if (name === '') problems.name = 'required';
-  else if (length(name) > parameterNameMax) problems.name = 'too_long';
-  if (length(draft.unitLabel.trim()) > unitLabelMax) problems.unitLabel = 'too_long';
-  const low = draft.low.trim() === '' ? null : parseDecimal(draft.low);
-  const high = draft.high.trim() === '' ? null : parseDecimal(draft.high);
-  if (draft.low.trim() !== '' && low === null) problems.low = 'invalid_number';
-  if (draft.high.trim() !== '' && high === null) problems.high = 'invalid_number';
-  if (low !== null && high !== null && low > high) problems.range = 'low_above_high';
-  if (draft.intervalDays.trim() !== '') {
-    const days = parseWholeNumber(draft.intervalDays);
-    if (days === null || days < 1 || days > maxTestInterval)
-      problems.intervalDays = 'invalid_interval';
-  }
-  return problems;
+/** The fields of the parameter draft that cannot be saved, keyed by the server's field names; `range` flags a low limit above the high one. */
+export function validateDefinition(draft: DefinitionDraft): FieldErrors {
+  return {
+    ...validateLimitPair(draft.low, draft.high, { low: 'default_low', high: 'default_high' }),
+    ...collectErrors({
+      name: validateName(draft.name, parameterNameMax),
+      unit_label: validateMaxLength(draft.unitLabel.trim(), unitLabelMax),
+      default_test_interval_days: intervalCode(draft.intervalDays)
+    })
+  };
 }
 
 const limit = (text: string) => (text.trim() === '' ? null : parseDecimal(text));
 const interval = (text: string) => (text.trim() === '' ? null : parseWholeNumber(text));
 
-/** The request that creates a custom parameter; the draft must have passed definitionProblems. */
+/** The request that creates a custom parameter; the draft must have passed validateDefinition. */
 export function newParameterBody(draft: DefinitionDraft): NewParameter {
   return {
     name: draft.name.trim(),

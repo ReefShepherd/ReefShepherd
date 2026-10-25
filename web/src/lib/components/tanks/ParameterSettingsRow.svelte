@@ -1,21 +1,18 @@
 <script lang="ts">
-  import { errorText } from '#lib/api/error-text.js';
-  import { fieldText } from '#lib/api/field-errors.js';
   import { paramsApi, type TankParameter } from '#lib/api/params.js';
   import Alert from '#lib/components/forms/Alert.svelte';
   import ScheduleEditor from '#lib/components/forms/ScheduleEditor.svelte';
   import ValueInput from '#lib/components/forms/ValueInput.svelte';
   import { focusFirstField, focusFirstInvalid } from '#lib/dom.js';
   import { formatDateTime } from '#lib/format/datetime.js';
+  import { hasErrors, type FieldErrors } from '#lib/forms/codes.js';
+  import { guarded, type GuardHooks } from '#lib/forms/guarded.js';
+  import { fieldTexts } from '#lib/forms/serverErrors.js';
   import { m } from '#lib/paraglide/messages.js';
   import { describeSchedule } from '#lib/schedule/describe.js';
   import { scheduleKinds } from '#lib/schedule/schedule.js';
   import { session } from '#lib/session/session.svelte.js';
-  import {
-    draftFromParameter,
-    parameterChanges,
-    type ParameterEdit
-  } from '#lib/tank/parameter-settings.js';
+  import { draftFromParameter, parameterChanges } from '#lib/tank/parameter-settings.js';
   import { rangeText } from '#lib/tank/range.js';
 
   interface Props {
@@ -43,9 +40,9 @@
   // The draft is rebuilt from the saved parameter each time editing starts.
   // svelte-ignore state_referenced_locally
   let draft = $state(draftFromParameter(parameter));
-  let problems = $state<ParameterEdit['problems']>({});
+  let errors = $state<FieldErrors>({});
+  const texts = $derived(fieldTexts(errors));
   let showScheduleErrors = $state(false);
-  let serverErrors = $state<{ low?: string; high?: string; schedule?: string }>({});
   let failure = $state('');
   let busy = $state(false);
   let form = $state<HTMLFormElement>();
@@ -54,65 +51,57 @@
 
   function startEditing() {
     draft = draftFromParameter(parameter);
-    problems = {};
-    serverErrors = {};
+    errors = {};
     showScheduleErrors = false;
     failure = '';
     editing = true;
   }
 
-  async function toggleEnabled(event: Event) {
-    const enabled = (event.currentTarget as HTMLInputElement).checked;
-    failure = '';
-    busy = true;
-    try {
-      onchanged(await paramsApi.saveTankParameter(tankId, parameter.parameter_id, { enabled }));
-    } catch (e) {
-      failure = errorText(e);
-      (event.target as HTMLInputElement).checked = parameter.enabled;
-    } finally {
-      busy = false;
-    }
+  const hooks: GuardHooks = {
+    failure: (text) => (failure = text),
+    busy: (b) => (busy = b),
+    fields: (f) => (errors = f),
+    shown: ['ideal_low', 'ideal_high', 'schedule', 'schedule.kind'],
+    form: () => form
+  };
+
+  function toggleEnabled(event: Event) {
+    const box = event.currentTarget as HTMLInputElement;
+    return guarded(
+      async () => {
+        try {
+          onchanged(
+            await paramsApi.saveTankParameter(tankId, parameter.parameter_id, {
+              enabled: box.checked
+            })
+          );
+        } catch (e) {
+          box.checked = parameter.enabled;
+          throw e;
+        }
+      },
+      { failure: (text) => (failure = text), busy: (b) => (busy = b) }
+    );
   }
 
   async function save(event: SubmitEvent) {
     event.preventDefault();
     failure = '';
-    serverErrors = {};
     const edit = parameterChanges(parameter, draft);
-    problems = edit.problems;
+    errors = edit.errors;
     showScheduleErrors = true;
-    if (Object.keys(problems).length > 0) return focusFirstInvalid(form);
+    if (hasErrors(errors) || edit.schedule.length > 0) return focusFirstInvalid(form);
     if (Object.keys(edit.changes).length === 0) {
       editing = false;
       return;
     }
 
-    busy = true;
-    try {
+    await guarded(async () => {
       const saved = await paramsApi.saveTankParameter(tankId, parameter.parameter_id, edit.changes);
       editing = false;
       onchanged(saved);
-    } catch (e) {
-      serverErrors = {
-        low: fieldText(e, 'ideal_low'),
-        high: fieldText(e, 'ideal_high'),
-        schedule: fieldText(e, 'schedule') ?? fieldText(e, 'schedule.kind')
-      };
-      if (!Object.values(serverErrors).some(Boolean)) failure = errorText(e);
-      await focusFirstInvalid(form);
-    } finally {
-      busy = false;
-    }
+    }, hooks);
   }
-
-  const numberText = (p?: 'invalid_number') => (p ? m.value_invalid_number() : undefined);
-  const lowText = $derived(numberText(problems.low) ?? serverErrors.low);
-  const highText = $derived(
-    numberText(problems.high) ??
-      (problems.range ? m.params_range_order() : undefined) ??
-      serverErrors.high
-  );
 </script>
 
 <li class="card item" class:off={!parameter.enabled} data-parameter-id={parameter.parameter_id}>
@@ -167,14 +156,24 @@
   {#if editing}
     <form class="stack" novalidate bind:this={form} onsubmit={save} use:focusFirstField>
       <div class="grid">
-        <ValueInput label={m.params_ideal_low()} bind:value={draft.low} {unit} error={lowText} />
-        <ValueInput label={m.params_ideal_high()} bind:value={draft.high} {unit} error={highText} />
+        <ValueInput
+          label={m.params_ideal_low()}
+          bind:value={draft.low}
+          {unit}
+          error={texts.ideal_low}
+        />
+        <ValueInput
+          label={m.params_ideal_high()}
+          bind:value={draft.high}
+          {unit}
+          error={texts.ideal_high ?? texts.range}
+        />
       </div>
       <ScheduleEditor
         bind:value={draft.schedule}
         allowedKinds={scheduleKinds}
         showErrors={showScheduleErrors}
-        error={serverErrors.schedule}
+        error={texts.schedule ?? texts['schedule.kind']}
       />
       <div class="row">
         <button class="btn primary" type="submit" disabled={busy}>{m.form_save()}</button>

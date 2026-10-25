@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '#lib/api/client.js';
-import { m } from '#lib/paraglide/messages.js';
 import {
   buildSetupRequest,
   loginChoice,
@@ -48,12 +47,12 @@ describe('newSetupDraft', () => {
 describe('validateSetupStep', () => {
   it('needs an instance name and a known timezone on the first step', () => {
     expect(validateSetupStep('instance', draft())).toEqual({});
-    expect(Object.keys(validateSetupStep('instance', draft({ instanceName: '  ' })))).toEqual([
-      'instanceName'
-    ]);
-    expect(Object.keys(validateSetupStep('instance', draft({ timeZone: 'Mars/Base' })))).toEqual([
-      'timeZone'
-    ]);
+    expect(validateSetupStep('instance', draft({ instanceName: '  ' }))).toEqual({
+      instance_name: 'required'
+    });
+    expect(validateSetupStep('instance', draft({ timeZone: 'Mars/Base' }))).toEqual({
+      timezone: 'invalid'
+    });
   });
 
   it('never blocks the units step', () => {
@@ -62,11 +61,11 @@ describe('validateSetupStep', () => {
 
   it('checks the account only when login is on', () => {
     const bad = draft({ username: '', password: 'short', passwordRepeat: 'other' });
-    expect(Object.keys(validateSetupStep('access', bad)).sort()).toEqual([
-      'password',
-      'passwordRepeat',
-      'username'
-    ]);
+    expect(validateSetupStep('access', bad)).toEqual({
+      username: 'required',
+      password: 'too_short',
+      password_repeat: 'invalid'
+    });
     expect(validateSetupStep('access', { ...bad, loginRequired: false })).toEqual({});
   });
 
@@ -141,14 +140,14 @@ describe('setupServerErrors', () => {
   const rejected = (fields: Record<string, string>) =>
     new ApiError(422, 'validation', 'invalid setup', fields);
 
-  it('maps server field names to draft fields as translated text', () => {
+  it('reports the flagged fields as codes, by server field name', () => {
     const { errors } = setupServerErrors(rejected({ username: 'already taken' }));
-    expect(errors).toEqual({ username: m.field_error_taken() });
+    expect(errors).toEqual({ username: 'taken' });
   });
 
   it('shows a rejected login mode on the access step', () => {
     const out = setupServerErrors(rejected({ auth_mode: 'must be password or disabled' }));
-    expect(out.errors).toEqual({ loginRequired: m.field_error_invalid() });
+    expect(out.errors).toEqual({ auth_mode: 'invalid' });
     expect(out.step).toBe('access');
   });
 
@@ -157,6 +156,13 @@ describe('setupServerErrors', () => {
     expect(setupServerErrors(both).step).toBe('instance');
     expect(setupServerErrors(rejected({ password: 'required' })).step).toBe('access');
     expect(setupServerErrors(rejected({ 'units.salinity': 'unknown unit' })).step).toBe('units');
+  });
+
+  it('leaves fields the setup form has no input for out of the errors', () => {
+    expect(setupServerErrors(rejected({ theme: 'must be one of light, dark' }))).toEqual({
+      errors: {},
+      step: undefined
+    });
   });
 
   it('reports nothing for errors that flag no field', () => {

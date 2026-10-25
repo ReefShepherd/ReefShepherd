@@ -1,17 +1,18 @@
 <script lang="ts">
   import { authApi, type TotpEnrollment } from '#lib/api/auth.js';
-  import { fieldText } from '#lib/api/field-errors.js';
-  import { guarded } from '#lib/api/guarded.js';
   import { authenticatorLink } from '#lib/auth/otpauth.js';
+  import Alert from '#lib/components/forms/Alert.svelte';
+  import TextField from '#lib/components/forms/TextField.svelte';
+  import { focusFirstField, focusFirstInvalid } from '#lib/dom.js';
+  import { hasErrors, type FieldErrors } from '#lib/forms/codes.js';
+  import { guarded } from '#lib/forms/guarded.js';
+  import { fieldTexts } from '#lib/forms/serverErrors.js';
   import {
     collectErrors,
     normalizeTotpCode,
     validateRequired,
     validateTotpCode
-  } from '#lib/auth/validation.js';
-  import Alert from '#lib/components/forms/Alert.svelte';
-  import TextField from '#lib/components/forms/TextField.svelte';
-  import { focusFirstField, focusFirstInvalid } from '#lib/dom.js';
+  } from '#lib/forms/validation.js';
   import { m } from '#lib/paraglide/messages.js';
   import { session } from '#lib/session/session.svelte.js';
   import RecoveryCodes from './RecoveryCodes.svelte';
@@ -24,22 +25,30 @@
   let recoveryCodes = $state<string[] | null>(null);
   let code = $state('');
   let proof = $state('');
-  let errors = $state<Partial<Record<'code' | 'proof', string>>>({});
+  let errors = $state<FieldErrors>({});
+  const texts = $derived(fieldTexts(errors));
+  // Turning two-step sign-in off asks for the password, or for a code when the account has none.
+  const proofField = $derived(hasPassword ? 'password' : 'code');
   let failure = $state('');
   let notice = $state('');
   let busy = $state(false);
   let form = $state<HTMLFormElement>();
 
-  function guard(action: () => Promise<void>) {
+  function guard(action: () => Promise<void>, shown: readonly string[] = []) {
     notice = '';
-    return guarded(action, { failure: (text) => (failure = text), busy: (b) => (busy = b) });
+    return guarded(action, {
+      failure: (text) => (failure = text),
+      busy: (b) => (busy = b),
+      fields: (f) => (errors = f),
+      shown,
+      form: () => form
+    });
   }
 
   function begin() {
     return guard(async () => {
       enrollment = await authApi.beginTotp();
       code = '';
-      errors = {};
     });
   }
 
@@ -53,43 +62,29 @@
   async function confirm(event: SubmitEvent) {
     event.preventDefault();
     errors = collectErrors({ code: validateTotpCode(code) });
-    if (Object.keys(errors).length > 0) return focusFirstInvalid(form);
+    if (hasErrors(errors)) return focusFirstInvalid(form);
     await guard(async () => {
-      try {
-        const result = await authApi.confirmTotp(normalizeTotpCode(code));
-        recoveryCodes = result.recovery_codes;
-        enrollment = null;
-        await session.load();
-      } catch (e) {
-        const text = fieldText(e, 'code');
-        if (text === undefined) throw e;
-        errors = { code: text };
-        await focusFirstInvalid(form);
-      }
-    });
+      const result = await authApi.confirmTotp(normalizeTotpCode(code));
+      recoveryCodes = result.recovery_codes;
+      enrollment = null;
+      await session.load();
+    }, ['code']);
   }
 
   async function disable(event: SubmitEvent) {
     event.preventDefault();
     errors = collectErrors({
-      proof: hasPassword ? validateRequired(proof) : validateTotpCode(proof)
+      [proofField]: hasPassword ? validateRequired(proof) : validateTotpCode(proof)
     });
-    if (Object.keys(errors).length > 0) return focusFirstInvalid(form);
+    if (hasErrors(errors)) return focusFirstInvalid(form);
     await guard(async () => {
-      try {
-        await authApi.disableTotp(
-          hasPassword ? { password: proof } : { code: normalizeTotpCode(proof) }
-        );
-        proof = '';
-        notice = m.totp_disabled();
-        await session.load();
-      } catch (e) {
-        const text = fieldText(e, hasPassword ? 'password' : 'code');
-        if (text === undefined) throw e;
-        errors = { proof: text };
-        await focusFirstInvalid(form);
-      }
-    });
+      await authApi.disableTotp(
+        hasPassword ? { password: proof } : { code: normalizeTotpCode(proof) }
+      );
+      proof = '';
+      notice = m.totp_disabled();
+      await session.load();
+    }, [proofField]);
   }
 </script>
 
@@ -124,7 +119,7 @@
       <TextField
         label={m.totp_code()}
         bind:value={code}
-        error={errors.code}
+        error={texts.code}
         inputmode="numeric"
         autocomplete="one-time-code"
       />
@@ -143,7 +138,7 @@
         type={hasPassword ? 'password' : 'text'}
         hint={hasPassword ? m.totp_disable_intro_password() : m.totp_disable_intro_code()}
         bind:value={proof}
-        error={errors.proof}
+        error={texts[proofField]}
         autocomplete={hasPassword ? 'current-password' : 'one-time-code'}
         inputmode={hasPassword ? undefined : 'numeric'}
       />

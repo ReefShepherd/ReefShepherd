@@ -26,7 +26,7 @@
 {:else}
   <div class="chart-card">
     <h3>{parameter.name}</h3>
-    <ParameterChart tankId={dash.tankId} parameterId={String(parameter.parameter_id)} bind:range />
+    <ParameterChart tankId={dash.tankId} parameterId={parameter.parameter_id} bind:range />
   </div>
 {/if}
 

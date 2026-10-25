@@ -1,3 +1,4 @@
+import type { Component } from 'svelte';
 import type { CardSize, DashboardBody, DashboardCard } from '#lib/api/dashboard.js';
 
 /** A card in the editable list; the id is only a key for the page, because the server numbers its own rows. */
@@ -19,9 +20,14 @@ export interface CardChoice {
   parameter_id: number | null;
 }
 
-export interface CardKindInfo {
-  type: string;
+/** What a card file exports: its component and what the picker and the editor need to know about the card. */
+export interface CardKind {
+  default: Component<{ card: Card }>;
+  cardType: string;
+  /** True when the card shows one parameter and so needs a parameter id. */
   needsParameter: boolean;
+  /** The card's name for pickers and screen readers; the parameter name is null for cards without one. */
+  cardLabel: (parameterName: string | null) => string;
 }
 
 export function isShadow(card: Card): boolean {
@@ -77,7 +83,7 @@ export function addCard(cards: Card[], card: Card): Card[] {
 /** The cards the user can still add: every card type, once per parameter for types that show one, minus those already on the list. */
 export function availableCards(
   cards: readonly Card[],
-  kinds: readonly CardKindInfo[],
+  kinds: readonly Pick<CardKind, 'cardType' | 'needsParameter'>[],
   parameterIds: readonly number[]
 ): CardChoice[] {
   const have = new Set(cards.map((c) => choiceKey(c.card_type, c.parameter_id)));
@@ -85,8 +91,8 @@ export function availableCards(
   for (const kind of kinds) {
     const ids = kind.needsParameter ? parameterIds : [null];
     for (const parameterId of ids) {
-      const key = choiceKey(kind.type, parameterId);
-      if (!have.has(key)) out.push({ key, card_type: kind.type, parameter_id: parameterId });
+      const key = choiceKey(kind.cardType, parameterId);
+      if (!have.has(key)) out.push({ key, card_type: kind.cardType, parameter_id: parameterId });
     }
   }
   return out;

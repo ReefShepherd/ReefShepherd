@@ -12,23 +12,26 @@
   // Opening a tank's page makes it the current tank, and a tank that no longer exists is forgotten.
   $effect(() => {
     const id = data.tankId;
+    const controller = new AbortController();
     tank = null;
-    let stale = false;
     tanksApi
-      .get(id)
+      .get(id, controller.signal)
       .then((loaded) => {
-        if (stale) return;
+        if (controller.signal.aborted) return;
         tank = loaded;
         if (loaded.archived_at === null) currentTank.set(id);
       })
       .catch((e: unknown) => {
-        if (!stale && isApiError(e) && e.status === 404 && currentTank.id === id) {
+        if (
+          !controller.signal.aborted &&
+          isApiError(e) &&
+          e.status === 404 &&
+          currentTank.id === id
+        ) {
           currentTank.set(null);
         }
       });
-    return () => {
-      stale = true;
-    };
+    return () => controller.abort();
   });
 </script>
 

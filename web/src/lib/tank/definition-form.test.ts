@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ParameterDefinition } from '#lib/api/params.js';
 import {
   definitionChanges,
-  definitionProblems,
+  validateDefinition,
   draftFromDefinition,
   newParameterBody
 } from './definition-form.js';
@@ -43,26 +43,32 @@ describe('draftFromDefinition', () => {
   });
 });
 
-describe('definitionProblems', () => {
+describe('validateDefinition', () => {
   const draft = draftFromDefinition(saved);
 
   it('is clean for a saved parameter', () => {
-    expect(definitionProblems(draft)).toEqual({});
+    expect(validateDefinition(draft)).toEqual({});
   });
 
   it('checks the name, unit label length, limits and interval', () => {
-    expect(definitionProblems({ ...draft, name: ' ' }).name).toBe('required');
-    expect(definitionProblems({ ...draft, name: 'x'.repeat(61) }).name).toBe('too_long');
-    expect(definitionProblems({ ...draft, unitLabel: 'x'.repeat(17) }).unitLabel).toBe('too_long');
-    expect(definitionProblems({ ...draft, low: 'a' }).low).toBe('invalid_number');
-    expect(definitionProblems({ ...draft, low: '90' }).range).toBe('low_above_high');
-    expect(definitionProblems({ ...draft, intervalDays: '0' }).intervalDays).toBe(
-      'invalid_interval'
+    expect(validateDefinition({ ...draft, name: ' ' }).name).toBe('required');
+    expect(validateDefinition({ ...draft, name: 'x'.repeat(61) }).name).toBe('too_long');
+    expect(validateDefinition({ ...draft, unitLabel: 'x'.repeat(17) }).unit_label).toBe('too_long');
+    expect(validateDefinition({ ...draft, low: 'a' }).default_low).toBe('invalid');
+    expect(validateDefinition({ ...draft, high: 'a' }).default_high).toBe('invalid');
+    expect(validateDefinition({ ...draft, low: '90' }).range).toBe('out_of_range');
+    expect(validateDefinition({ ...draft, intervalDays: '0' }).default_test_interval_days).toBe(
+      'out_of_range'
     );
-    expect(definitionProblems({ ...draft, intervalDays: '3651' }).intervalDays).toBe(
-      'invalid_interval'
+    expect(validateDefinition({ ...draft, intervalDays: '3651' }).default_test_interval_days).toBe(
+      'out_of_range'
     );
-    expect(definitionProblems({ ...draft, intervalDays: '' }).intervalDays).toBeUndefined();
+    expect(validateDefinition({ ...draft, intervalDays: '1.5' }).default_test_interval_days).toBe(
+      'invalid'
+    );
+    expect(
+      validateDefinition({ ...draft, intervalDays: '' }).default_test_interval_days
+    ).toBeUndefined();
   });
 });
 

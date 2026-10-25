@@ -1,10 +1,10 @@
-import { parseTankId } from '#lib/api/tank-id.js';
+import { parseId } from '#lib/api/tank-id.js';
 
 export const currentTankKey = 'current_tank';
 
 function read(): number | null {
   try {
-    return parseTankId(localStorage.getItem(currentTankKey));
+    return parseId(localStorage.getItem(currentTankKey));
   } catch {
     return null;
   }

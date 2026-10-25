@@ -5,7 +5,6 @@
   import { errorText } from '#lib/api/error-text.js';
   import { settingsApi, type UnitFamily } from '#lib/api/settings.js';
   import { usersApi } from '#lib/api/users.js';
-  import { passwordLimits } from '#lib/auth/validation.js';
   import Alert from '#lib/components/forms/Alert.svelte';
   import LoginModeField from '#lib/components/forms/LoginModeField.svelte';
   import TextField from '#lib/components/forms/TextField.svelte';
@@ -15,6 +14,9 @@
   import PageTitle from '#lib/components/shell/PageTitle.svelte';
   import { focusFirstField, focusFirstInvalid } from '#lib/dom.js';
   import { browserTimeZone } from '#lib/format/timezone.js';
+  import { hasErrors, type FieldErrors } from '#lib/forms/codes.js';
+  import { fieldTexts } from '#lib/forms/serverErrors.js';
+  import { passwordLimits } from '#lib/forms/validation.js';
   import { m } from '#lib/paraglide/messages.js';
   import { session } from '#lib/session/session.svelte.js';
   import {
@@ -23,8 +25,7 @@
     newSetupDraft,
     setupServerErrors,
     setupSteps,
-    validateSetupStep,
-    type SetupErrors
+    validateSetupStep
   } from '#lib/setup/wizard.js';
   import { theme, type ThemeName } from '#lib/theme/theme.svelte.js';
   import { defaultUnits } from '#lib/units/catalog.js';
@@ -37,7 +38,8 @@
   let loadError = $state('');
   let loginLocked = $state(false);
   let stepIndex = $state(0);
-  let errors = $state<SetupErrors>({});
+  let errors = $state<FieldErrors>({});
+  const texts = $derived(fieldTexts(errors));
   let failure = $state('');
   let busy = $state(false);
   let form = $state<HTMLFormElement>();
@@ -84,7 +86,7 @@
     event.preventDefault();
     failure = '';
     errors = validateSetupStep(step, draft);
-    if (Object.keys(errors).length > 0) return focusFirstInvalid(form);
+    if (hasErrors(errors)) return focusFirstInvalid(form);
     if (!last) {
       stepIndex += 1;
       return;
@@ -133,14 +135,14 @@
             label={m.setup_instance_name()}
             hint={m.setup_instance_name_hint()}
             bind:value={draft.instanceName}
-            error={errors.instanceName}
+            error={texts.instance_name}
             autocomplete="off"
           />
           <TimeZoneField
             label={m.setup_timezone()}
             hint={m.setup_timezone_hint()}
             bind:value={draft.timeZone}
-            error={errors.timeZone}
+            error={texts.timezone}
           />
           <ThemePicker value={draft.theme} onchange={chooseTheme} />
         {:else if step === 'units'}
@@ -153,14 +155,14 @@
             disableOn={loginLocked}
             disableOff={loginLocked}
             note={loginLocked ? m.setup_login_locked() : undefined}
-            error={errors.loginRequired}
+            error={texts.auth_mode}
           />
 
           {#if draft.loginRequired}
             <TextField
               label={m.setup_username()}
               bind:value={draft.username}
-              error={errors.username}
+              error={texts.username}
               autocomplete="username"
               autocapitalize="none"
               spellcheck={false}
@@ -168,7 +170,7 @@
             <TextField
               label={m.setup_display_name()}
               bind:value={draft.displayName}
-              error={errors.displayName}
+              error={texts.display_name}
               autocomplete="name"
             />
             <TextField
@@ -176,14 +178,14 @@
               type="password"
               hint={m.password_hint({ min: passwordLimits.min })}
               bind:value={draft.password}
-              error={errors.password}
+              error={texts.password}
               autocomplete="new-password"
             />
             <TextField
               label={m.setup_password_repeat()}
               type="password"
               bind:value={draft.passwordRepeat}
-              error={errors.passwordRepeat}
+              error={texts.password_repeat}
               autocomplete="new-password"
             />
           {:else}

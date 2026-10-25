@@ -2,15 +2,17 @@
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
   import { errorText } from '#lib/api/error-text.js';
-  import { fieldText } from '#lib/api/field-errors.js';
   import { settingsApi, type InstanceSettings, type UnitFamily } from '#lib/api/settings.js';
-  import { collectErrors, validateRequired, validateTimeZone } from '#lib/auth/validation.js';
   import Alert from '#lib/components/forms/Alert.svelte';
   import LoginModeField from '#lib/components/forms/LoginModeField.svelte';
   import TextField from '#lib/components/forms/TextField.svelte';
   import TimeZoneField from '#lib/components/forms/TimeZoneField.svelte';
   import UnitPicker from '#lib/components/forms/UnitPicker.svelte';
   import { focusFirstInvalid } from '#lib/dom.js';
+  import { hasErrors, type FieldErrors } from '#lib/forms/codes.js';
+  import { guarded, type GuardHooks } from '#lib/forms/guarded.js';
+  import { fieldTexts, moveField } from '#lib/forms/serverErrors.js';
+  import { collectErrors, validateRequired, validateTimeZone } from '#lib/forms/validation.js';
   import { m } from '#lib/paraglide/messages.js';
   import { session } from '#lib/session/session.svelte.js';
   import {
@@ -29,7 +31,8 @@
   let failure = $state('');
   let saved = $state(false);
   let busy = $state(false);
-  let errors = $state<Partial<Record<'name' | 'timeZone' | 'login' | 'password', string>>>({});
+  let errors = $state<FieldErrors>({});
+  const texts = $derived(fieldTexts(errors));
   let form = $state<HTMLFormElement>();
 
   const patch = $derived(original && draft ? settingsPatch(original, draft) : {});
@@ -56,23 +59,30 @@
       .catch((e: unknown) => (loadError = errorText(e)));
   });
 
+  const hooks: GuardHooks = {
+    failure: (text) => (failure = text),
+    busy: (b) => (busy = b),
+    // The confirmation password is the server's `password`; it reads as the current password here.
+    fields: (f) => (errors = moveField(f, 'password', 'current_password')),
+    shown: ['instance_name', 'timezone', 'auth_mode', 'password'],
+    form: () => form
+  };
+
   async function submit(event: SubmitEvent) {
     event.preventDefault();
     if (!original || !draft) return;
     saved = false;
     failure = '';
     errors = collectErrors({
-      name: validateRequired(draft.instanceName),
-      timeZone: validateTimeZone(draft.timeZone),
-      login: null,
-      password: loginOff ? validateRequired(draft.password) : null
+      instance_name: validateRequired(draft.instanceName),
+      timezone: validateTimeZone(draft.timeZone),
+      current_password: loginOff ? validateRequired(draft.password) : null
     });
-    if (Object.keys(errors).length > 0) return focusFirstInvalid(form);
+    if (hasErrors(errors)) return focusFirstInvalid(form);
     if (!hasChanges(patch)) return;
 
     const goingBackToLogin = turnsLoginOn(original, draft);
-    busy = true;
-    try {
+    await guarded(async () => {
       const result = await settingsApi.update(patch);
       original = result;
       draft = draftFromSettings(result);
@@ -84,18 +94,7 @@
         return;
       }
       await session.load();
-    } catch (e) {
-      errors = {
-        name: fieldText(e, 'instance_name'),
-        timeZone: fieldText(e, 'timezone'),
-        login: fieldText(e, 'auth_mode'),
-        password: fieldText(e, 'password')
-      };
-      if (!Object.values(errors).some(Boolean)) failure = errorText(e);
-      await focusFirstInvalid(form);
-    } finally {
-      busy = false;
-    }
+    }, hooks);
   }
 </script>
 
@@ -117,7 +116,7 @@
       <TextField
         label={m.instance_name()}
         bind:value={draft.instanceName}
-        error={errors.name}
+        error={texts.instance_name}
         disabled={lockedBy('instance_name') !== undefined}
         hint={lockedBy('instance_name')
           ? m.instance_env_locked({ variable: lockedBy('instance_name') ?? '' })
@@ -127,7 +126,7 @@
       <TimeZoneField
         label={m.instance_timezone()}
         bind:value={draft.timeZone}
-        error={errors.timeZone}
+        error={texts.timezone}
         disabled={lockedBy('timezone') !== undefined}
         hint={lockedBy('timezone')
           ? m.instance_env_locked({ variable: lockedBy('timezone') ?? '' })
@@ -151,7 +150,7 @@
         disableOn={lockedBy('auth_mode') !== undefined || needsPassword}
         disableOff={lockedBy('auth_mode') !== undefined}
         note={loginNote}
-        error={errors.login}
+        error={texts.auth_mode}
       />
 
       {#if loginOff}
@@ -161,7 +160,7 @@
           type="password"
           hint={m.instance_confirm_password_hint()}
           bind:value={draft.password}
-          error={errors.password}
+          error={texts.current_password}
           autocomplete="current-password"
         />
       {/if}
