@@ -1,0 +1,17 @@
+{
+  "$schema": "https://inlang.com/schema/inlang-message-format",
+  "nav_label": "Main",
+  "nav_skip_to_content": "Skip to content",
+  "nav_dashboard": "Dashboard",
+  "nav_tanks": "Tanks",
+  "nav_tests": "Log tests",
+  "nav_charts": "Charts",
+  "nav_settings": "Settings",
+  "theme_label": "Theme",
+  "theme_light": "Light",
+  "theme_dark": "Dark",
+  "theme_oled": "OLED",
+  "theme_system": "System",
+  "tank_switcher_label": "Tank",
+  "tank_switcher_none": "No tanks yet"
+}

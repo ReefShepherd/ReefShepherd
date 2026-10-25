@@ -1,0 +1,13 @@
+{
+  "$schema": "https://inlang.com/schema/inlang-message-format",
+  "app_name": "ReefShepherd",
+  "page_title": "{page} · {app}",
+  "detail_pair": "{first} · {second}",
+  "page_placeholder": "This page is not built yet.",
+  "error_not_found_title": "Page not found",
+  "error_not_found_body": "There is nothing at this address.",
+  "error_generic_title": "Something went wrong",
+  "error_generic_body": "The page could not be shown. Try again in a moment.",
+  "error_back_home": "Back to the dashboard",
+  "loading": "Loading"
+}
