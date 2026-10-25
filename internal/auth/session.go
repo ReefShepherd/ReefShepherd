@@ -98,9 +98,9 @@ func (s *Service) startSession(w http.ResponseWriter, r *http.Request, userID in
 		AuthMethod: method,
 		UserAgent:  strings.ToValidUTF8(ua, ""),
 		IpAddress:  httpx.ClientIP(r, s.Config.TrustedProxies).String(),
-		CreatedAt:  formatTime(now),
-		LastSeenAt: formatTime(now),
-		ExpiresAt:  formatTime(now.Add(lifetime)),
+		CreatedAt:  db.FormatTime(now),
+		LastSeenAt: db.FormatTime(now),
+		ExpiresAt:  db.FormatTime(now.Add(lifetime)),
 	}
 	err = s.DB.InTx(ctx, func(tx *sql.Tx) error {
 		q := db.Q(tx)
@@ -110,7 +110,7 @@ func (s *Service) startSession(w http.ResponseWriter, r *http.Request, userID in
 				return fmt.Errorf("drop previous session: %w", err)
 			}
 		}
-		if _, err := q.DeleteExpiredSessions(ctx, formatTime(now)); err != nil {
+		if _, err := q.DeleteExpiredSessions(ctx, db.FormatTime(now)); err != nil {
 			return fmt.Errorf("delete expired sessions: %w", err)
 		}
 		if _, err := q.CreateSession(ctx, params); err != nil {
@@ -127,7 +127,7 @@ func (s *Service) startSession(w http.ResponseWriter, r *http.Request, userID in
 
 // CleanupExpired deletes the sessions that have run out.
 func (s *Service) CleanupExpired(ctx context.Context) error {
-	if _, err := db.Q(s.DB.W).DeleteExpiredSessions(ctx, formatTime(s.now())); err != nil {
+	if _, err := db.Q(s.DB.W).DeleteExpiredSessions(ctx, db.FormatTime(s.now())); err != nil {
 		return fmt.Errorf("delete expired sessions: %w", err)
 	}
 	return nil
@@ -141,7 +141,7 @@ func (s *Service) sessionFromCookie(ctx context.Context, r *http.Request) (dbgen
 	}
 	row, err := db.Q(s.DB.R).GetSessionByTokenHash(ctx, dbgen.GetSessionByTokenHashParams{
 		TokenHash: hashToken(c.Value),
-		ExpiresAt: formatTime(s.now()),
+		ExpiresAt: db.FormatTime(s.now()),
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return dbgen.GetSessionByTokenHashRow{}, false, nil
@@ -168,20 +168,20 @@ func (s *Service) authenticate(w http.ResponseWriter, r *http.Request) (httpx.Us
 		return httpx.User{}, sessionInfo{}, false, err
 	}
 	now := s.now()
-	if seen, perr := parseTime(row.LastSeenAt); perr != nil || now.Sub(seen) >= touchInterval {
+	if seen, perr := db.ParseTime(row.LastSeenAt); perr != nil || now.Sub(seen) >= touchInterval {
 		if err := s.touch(w, r, row, now); err != nil {
 			return httpx.User{}, sessionInfo{}, false, err
 		}
 	}
-	user := httpx.User{ID: row.UserID, Username: row.Username, DisplayName: row.DisplayName, Role: row.Role}
+	user := newUser(row.UserID, row.Username, row.DisplayName, row.Role)
 	return user, sessionInfo{ID: row.SessionID, Method: row.AuthMethod}, true, nil
 }
 
 // touch slides the expiry forward and re-issues the cookie so the browser's copy lives as long as the row.
 func (s *Service) touch(w http.ResponseWriter, r *http.Request, row dbgen.GetSessionByTokenHashRow, now time.Time) error {
 	err := db.Q(s.DB.W).TouchSession(r.Context(), dbgen.TouchSessionParams{
-		LastSeenAt: formatTime(now),
-		ExpiresAt:  formatTime(now.Add(sessionLifetime)),
+		LastSeenAt: db.FormatTime(now),
+		ExpiresAt:  db.FormatTime(now.Add(sessionLifetime)),
 		ID:         row.SessionID,
 	})
 	if err != nil {

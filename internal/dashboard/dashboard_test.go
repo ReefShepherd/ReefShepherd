@@ -377,7 +377,7 @@ func TestEveryCardHiddenGivesAnEmptyListWithoutReseeding(t *testing.T) {
 	wantShape(t, e.get(userA, tank), "tests_due:-:normal", "parameter:"+id(a)+":normal")
 }
 
-func TestMissingTankAndSignIn(t *testing.T) {
+func TestMissingTank(t *testing.T) {
 	e := newEnv(t)
 	tank := e.tank("Display")
 	for _, c := range []struct {
@@ -391,7 +391,6 @@ func TestMissingTankAndSignIn(t *testing.T) {
 		testutil.ExpectError(e.t, e.do(userA, c.method, dashPath(tank+100, c.suffix), c.body), http.StatusNotFound, "not_found")
 		testutil.ExpectError(e.t, e.do(userA, c.method, "/api/v1/tanks/abc/dashboard"+c.suffix, c.body), http.StatusNotFound, "not_found")
 		testutil.ExpectError(e.t, e.do(userA, c.method, "/api/v1/tanks/0/dashboard"+c.suffix, c.body), http.StatusNotFound, "not_found")
-		testutil.ExpectError(e.t, e.do(0, c.method, dashPath(tank, c.suffix), c.body), http.StatusUnauthorized, "unauthorized")
 	}
 	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM dashboard_cards`); n != 0 {
 		t.Errorf("%d cards written for failed requests", n)

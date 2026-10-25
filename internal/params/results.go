@@ -131,10 +131,10 @@ func (s *Service) CreateResults(ctx context.Context, tankID, userID int64, in Cr
 		if err := fields.err("invalid results"); err != nil {
 			return err
 		}
-		stamp := s.stamp()
+		stamp := db.FormatTime(s.now())
 		for _, rd := range readings {
 			row := dbgen.TestResult{
-				TankID: tankID, ParameterID: rd.parameterID, MeasuredAt: measured.Format(db.TimeLayout), Value: rd.value,
+				TankID: tankID, ParameterID: rd.parameterID, MeasuredAt: db.FormatTime(measured), Value: rd.value,
 				Note: rd.note, Source: sourceManual, CreatedBy: &userID, CreatedAt: stamp, UpdatedAt: stamp,
 			}
 			id, err := q.InsertTestResult(ctx, dbgen.InsertTestResultParams{
@@ -275,7 +275,7 @@ func (s *Service) UpdateResult(ctx context.Context, id int64, in UpdateResultInp
 		fields := fieldErrors{}
 		measuredAt, value, note := cur.MeasuredAt, cur.Value, cur.Note
 		if in.MeasuredAt != nil {
-			measuredAt = s.checkMeasuredAt(in.MeasuredAt, fields).Format(db.TimeLayout)
+			measuredAt = db.FormatTime(s.checkMeasuredAt(in.MeasuredAt, fields))
 		}
 		if in.Value != nil {
 			c, msg := m.canonical(*in.Value)
@@ -293,7 +293,7 @@ func (s *Service) UpdateResult(ctx context.Context, id int64, in UpdateResultInp
 		if err := fields.err("invalid result"); err != nil {
 			return err
 		}
-		if _, err := q.UpdateTestResult(ctx, dbgen.UpdateTestResultParams{MeasuredAt: measuredAt, Value: value, Note: note, UpdatedAt: s.stamp(), ID: id}); err != nil {
+		if _, err := q.UpdateTestResult(ctx, dbgen.UpdateTestResultParams{MeasuredAt: measuredAt, Value: value, Note: note, UpdatedAt: db.FormatTime(s.now()), ID: id}); err != nil {
 			return fmt.Errorf("update result: %w", err)
 		}
 		return nil
@@ -388,7 +388,7 @@ func formatTimePtr(t *time.Time) *string {
 	if t == nil {
 		return nil
 	}
-	s := t.UTC().Format(db.TimeLayout)
+	s := db.FormatTime(*t)
 	return &s
 }
 
@@ -405,7 +405,7 @@ func decodeCursor(c string) (measuredAt string, id int64, err error) {
 	if !ok {
 		return "", 0, errors.New("malformed cursor")
 	}
-	if _, err := time.Parse(time.RFC3339, at); err != nil {
+	if _, err := db.ParseTime(at); err != nil {
 		return "", 0, err
 	}
 	id, err = strconv.ParseInt(idText, 10, 64)

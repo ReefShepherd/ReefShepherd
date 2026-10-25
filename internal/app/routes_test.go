@@ -2,9 +2,15 @@ package app
 
 import (
 	"bytes"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -31,7 +37,7 @@ func TestRegisterRoutesWiresRealDepsIntoPackages(t *testing.T) {
 		Config: config.Config{}, Logger: testutil.Logger(t),
 	})
 	mux := http.NewServeMux()
-	registerRoutes(mux, routeDeps{Config: config.Config{}, Logger: testutil.Logger(t), DB: database, Settings: store, Auth: authSvc}, webui.NewHandler(fstest.MapFS{".gitkeep": {}}))
+	registerRoutes(mux, routeDeps{Config: config.Config{}, Logger: testutil.Logger(t), DB: database, Settings: store, Auth: authSvc}, webui.NewHandler(fstest.MapFS{".gitkeep": {}}, testutil.Logger(t)))
 
 	serve := func(method, target, body, cookie string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, target, strings.NewReader(body))
@@ -99,13 +105,98 @@ func TestRegisterRoutesWiresRealDepsIntoPackages(t *testing.T) {
 	}
 }
 
+var (
+	apiRoutePattern = regexp.MustCompile(`^(GET|POST|PUT|PATCH|DELETE) /api/`)
+	pathWildcard    = regexp.MustCompile(`\{[a-z]+\}`)
+)
+
+// declaredAPIRoutes reads the feature packages' source for the method-and-path patterns they register under /api/, split by whether the registering function is PublicRoutes.
+func declaredAPIRoutes(t *testing.T) (public, protected []string) {
+	t.Helper()
+	files, err := filepath.Glob("../*/*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			ast.Inspect(fn, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok || len(call.Args) == 0 {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				lit, isLit := call.Args[0].(*ast.BasicLit)
+				if !ok || !isLit || (sel.Sel.Name != "Handle" && sel.Sel.Name != "HandleFunc") {
+					return true
+				}
+				pattern, err := strconv.Unquote(lit.Value)
+				if err != nil || !apiRoutePattern.MatchString(pattern) {
+					return true
+				}
+				if fn.Name.Name == "PublicRoutes" {
+					public = append(public, pattern)
+				} else {
+					protected = append(protected, pattern)
+				}
+				return true
+			})
+		}
+	}
+	slices.Sort(public)
+	slices.Sort(protected)
+	return public, protected
+}
+
+// TestEveryNonPublicRouteRejectsAnonymousRequests finds each route a feature package registers and expects every one outside the short public list to answer 401 without a session, once setup is done.
+func TestEveryNonPublicRouteRejectsAnonymousRequests(t *testing.T) {
+	public, protected := declaredAPIRoutes(t)
+	wantPublic := []string{
+		"GET /api/v1/auth/config", "GET /api/v1/units", "POST /api/v1/auth/login",
+		"POST /api/v1/auth/logout", "POST /api/v1/auth/mfa", "POST /api/v1/setup",
+	}
+	if !slices.Equal(public, wantPublic) {
+		t.Fatalf("public routes = %v, want %v", public, wantPublic)
+	}
+	if !slices.Contains(protected, "GET /api/v1/tanks") {
+		t.Fatalf("route scan found no tank routes among %v", protected)
+	}
+
+	a := newAPITestApp(t, config.Config{})
+	newClient(t, a).setup(nil)
+	anon := newClient(t, a)
+	for _, pattern := range protected {
+		method, target, _ := strings.Cut(pathWildcard.ReplaceAllString(pattern, "1"), " ")
+		var body any
+		if method != http.MethodGet && method != http.MethodDelete {
+			body = map[string]any{}
+		}
+		rec := anon.do(method, target, body)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s without a session: %d %s", pattern, rec.Code, rec.Body)
+		}
+	}
+}
+
 // TestFeatureRoutesLogUnexpectedFailuresToTheAppLogger breaks each feature's tables so its read fails unexpectedly, and expects the failure in the app's own log.
 func TestFeatureRoutesLogUnexpectedFailuresToTheAppLogger(t *testing.T) {
 	var logs bytes.Buffer
 	database := openTestDB(t)
 	store := settings.NewStore(database)
 	hasher := password.NewHasher(password.Params{Time: 1, MemoryKiB: 64, Threads: 1})
-	app, err := newApp(config.Config{}, slog.New(slog.NewTextHandler(&logs, nil)), database, store, hasher, webui.Handler())
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	app, err := newApp(config.Config{}, logger, database, store, hasher, webui.Handler(logger))
 	if err != nil {
 		t.Fatal(err)
 	}

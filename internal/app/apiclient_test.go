@@ -38,7 +38,7 @@ func newAPITestApp(t *testing.T, cfg config.Config) *testApp {
 	database := openTestDB(t)
 	store := settings.NewStore(database)
 	hasher := password.NewHasher(password.Params{Time: 1, MemoryKiB: 64, Threads: 1})
-	a, err := newApp(cfg, testutil.Logger(t), database, store, hasher, webui.Handler())
+	a, err := newApp(cfg, testutil.Logger(t), database, store, hasher, webui.Handler(testutil.Logger(t)))
 	if err != nil {
 		t.Fatal(err)
 	}

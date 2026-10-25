@@ -146,6 +146,16 @@ func TestAsUserSignsTheRequestIn(t *testing.T) {
 	}
 }
 
+func TestWithHeaderSetsAndReplacesAHeader(t *testing.T) {
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprintf(w, "%q", r.Header.Values("X-Probe"))
+	})
+	rec := DoRaw(t, h, http.MethodGet, "/x", "", "", WithHeader("X-Probe", "first"), WithHeader("X-Probe", "second"))
+	if got, want := rec.Body.String(), `["second"]`; got != want {
+		t.Errorf("got %s, want %s", got, want)
+	}
+}
+
 func TestDecode(t *testing.T) {
 	type item struct{ N int }
 	rec := httptest.NewRecorder()

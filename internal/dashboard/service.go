@@ -97,8 +97,6 @@ func NewService(deps Deps) *Service {
 	return &Service{Deps: deps, now: time.Now}
 }
 
-func (s *Service) stamp() string { return s.now().UTC().Format(db.TimeLayout) }
-
 // Get returns the user's cards for a tank, creating the default layout the first time the user has none.
 func (s *Service) Get(ctx context.Context, userID, tankID int64) (Layout, error) {
 	q := db.Q(s.DB.R)
@@ -173,7 +171,7 @@ func (s *Service) Replace(ctx context.Context, userID, tankID int64, cards []Car
 		if _, err := q.DeleteDashboardCards(ctx, dbgen.DeleteDashboardCardsParams{UserID: userID, TankID: tankID}); err != nil {
 			return fmt.Errorf("clear dashboard cards: %w", err)
 		}
-		now := s.stamp()
+		now := db.FormatTime(s.now())
 		for i, row := range rows {
 			row.UserID, row.TankID, row.Position, row.CreatedAt = userID, tankID, int64(i), now
 			if err := q.InsertDashboardCard(ctx, row); err != nil {
@@ -201,7 +199,7 @@ func (s *Service) seedDefault(ctx context.Context, q *dbgen.Queries, userID, tan
 	if err != nil {
 		return fmt.Errorf("list enabled parameters: %w", err)
 	}
-	now := s.stamp()
+	now := db.FormatTime(s.now())
 	insert := func(position int, kind string, parameterID *int64) error {
 		err := q.InsertDashboardCard(ctx, dbgen.InsertDashboardCardParams{
 			UserID: userID, TankID: tankID, CardType: kind, ParameterID: parameterID,

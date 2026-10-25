@@ -41,8 +41,6 @@ func NewService(deps Deps) *Service {
 	return &Service{Deps: deps, r: deps.DB.R, now: time.Now}
 }
 
-func (s *Service) stamp() string { return s.now().UTC().Format(db.TimeLayout) }
-
 // Result is a stored test result with its value in the parameter's canonical unit.
 type Result struct {
 	ID          int64
@@ -96,11 +94,11 @@ func cleanText(s string, maxRunes int) (string, bool) {
 
 // parseTimestamp reads an RFC 3339 instant and drops the sub-second part.
 func parseTimestamp(s string) (time.Time, error) {
-	t, err := time.Parse(time.RFC3339, s)
+	t, err := db.ParseTime(s)
 	if err != nil {
 		return time.Time{}, errors.New("must be an RFC 3339 timestamp such as 2026-10-24T09:30:00Z")
 	}
-	return t.UTC().Truncate(time.Second), nil
+	return t.Truncate(time.Second), nil
 }
 
 // meta says how one parameter is shown: the unit chosen for its family, or its own label and decimals when the family is fixed.

@@ -144,7 +144,7 @@ func settingsOf(row dbgen.ListTankParametersRow) (tankSettings, error) {
 	if err != nil {
 		return tankSettings{}, fmt.Errorf("schedule of parameter %d: %w", row.ParameterID, err)
 	}
-	scheduleSince, err := time.Parse(time.RFC3339, deref(row.ScheduleSince))
+	scheduleSince, err := db.ParseTime(deref(row.ScheduleSince))
 	if err != nil {
 		return tankSettings{}, fmt.Errorf("settings time of parameter %d: %w", row.ParameterID, err)
 	}
@@ -173,20 +173,20 @@ func tankParameterOf(d *display, row dbgen.ListTankParametersRow, loc *time.Loca
 	}
 	var lastDone *time.Time
 	if row.LatestResultID != nil {
-		at, err := time.Parse(time.RFC3339, deref(row.LatestMeasuredAt))
+		at, err := db.ParseTime(deref(row.LatestMeasuredAt))
 		if err != nil {
 			return TankParameter{}, fmt.Errorf("measured time of result %d: %w", *row.LatestResultID, err)
 		}
 		value := deref(row.LatestValue)
 		out.Latest = &Latest{
 			ResultID: *row.LatestResultID, Value: m.show(value),
-			MeasuredAt: at.UTC().Format(db.TimeLayout), InRange: m.inRange(value, st.low, st.high),
+			MeasuredAt: db.FormatTime(at), InRange: m.inRange(value, st.low, st.high),
 		}
 		lastDone = &at
 	}
 	if st.enabled {
 		if due, ok := schedule.NextDue(st.sched, lastDone, st.scheduleSince, loc); ok {
-			next := due.UTC().Format(db.TimeLayout)
+			next := db.FormatTime(due)
 			out.NextDue = &next
 			out.Overdue = now.After(due)
 		}
@@ -200,11 +200,7 @@ func (s *Service) tankParameters(ctx context.Context, q dbgen.DBTX, tankID int64
 	if err != nil {
 		return nil, "", err
 	}
-	include := int64(0)
-	if parameterID != nil {
-		include = 1
-	}
-	rows, err := db.Q(q).ListTankParameters(ctx, dbgen.ListTankParametersParams{TankID: tankID, ParameterID: parameterID, IncludeArchived: include})
+	rows, err := db.Q(q).ListTankParameters(ctx, dbgen.ListTankParametersParams{TankID: tankID, ParameterID: parameterID, IncludeArchived: db.Flag(parameterID != nil)})
 	if err != nil {
 		return nil, "", fmt.Errorf("list tank parameters: %w", err)
 	}
@@ -297,19 +293,15 @@ func (s *Service) SetTankParameter(ctx context.Context, tankID, parameterID int6
 		}
 
 		cols := cur.sched.Columns()
-		since := before.scheduleSince.UTC().Format(db.TimeLayout)
+		since := db.FormatTime(before.scheduleSince)
 		if !before.configured || (cur.enabled && !before.enabled) || !reflect.DeepEqual(before.sched.Columns(), cols) {
-			since = s.stamp()
-		}
-		enabled := int64(0)
-		if cur.enabled {
-			enabled = 1
+			since = db.FormatTime(s.now())
 		}
 		if err := q.UpsertTankParameter(ctx, dbgen.UpsertTankParameterParams{
-			TankID: tankID, ParameterID: parameterID, Enabled: enabled, IdealLow: cur.low, IdealHigh: cur.high,
+			TankID: tankID, ParameterID: parameterID, Enabled: db.Flag(cur.enabled), IdealLow: cur.low, IdealHigh: cur.high,
 			ScheduleKind: cols.Kind, IntervalDays: toInt64Ptr(cols.IntervalDays), Weekdays: toInt64Ptr(cols.Weekdays),
 			IntervalWeeks: int64(cols.IntervalWeeks), MonthDay: toInt64Ptr(cols.MonthDay), AnchorDate: cols.AnchorDate,
-			DueTime: cols.DueTime, SortOrder: cur.sortOrder, ScheduleSince: since, UpdatedAt: s.stamp(),
+			DueTime: cols.DueTime, SortOrder: cur.sortOrder, ScheduleSince: since, UpdatedAt: db.FormatTime(s.now()),
 		}); err != nil {
 			return fmt.Errorf("save tank parameter: %w", err)
 		}

@@ -22,9 +22,6 @@ import (
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
-// TimeLayout is the stored form of every timestamp: UTC, whole seconds.
-const TimeLayout = "2006-01-02T15:04:05Z"
-
 const (
 	busyTimeoutMillis = 5000
 	readerConns       = 4

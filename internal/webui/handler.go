@@ -49,9 +49,9 @@ func init() {
 
 // NewHandler serves the UI files in fsys: real files as they are (precompressed when the client accepts it),
 // hashed assets with a long cache, and every other extensionless non-API path with the single-page-app shell
-// (or a placeholder when the UI is not built), warning once when the shell has no policy.
-func NewHandler(fsys fs.FS) http.Handler {
-	return newHandler(fsys, slog.Default())
+// (or a placeholder when the UI is not built), warning through logger once when the shell has no policy.
+func NewHandler(fsys fs.FS, logger *slog.Logger) http.Handler {
+	return newHandler(fsys, logger)
 }
 
 func newHandler(fsys fs.FS, logger *slog.Logger) *handler {

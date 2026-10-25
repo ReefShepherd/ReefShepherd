@@ -9,16 +9,6 @@ import (
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
 )
 
-type handlerFunc func(w http.ResponseWriter, r *http.Request) error
-
-func (s *Service) handle(h handlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if err := h(w, r); err != nil {
-			httpx.Fail(s.Logger, w, r, err)
-		}
-	}
-}
-
 // pathID reads a positive integer path value, answering 404 with what was not found when it is not one.
 func pathID(r *http.Request, name, what string) (int64, error) {
 	id, ok := httpx.PathID(r, name)
@@ -205,10 +195,7 @@ func (s *Service) createResults(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	user, err := httpx.RequireUser(r)
-	if err != nil {
-		return err
-	}
+	user, _ := httpx.CurrentUser(r.Context())
 	var req createResultsRequest
 	if err := httpx.DecodeJSON(r, &req); err != nil {
 		return err

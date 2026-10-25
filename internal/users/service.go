@@ -86,8 +86,6 @@ func NewService(deps Deps) *Service {
 	return &Service{Deps: deps, now: time.Now}
 }
 
-func (s *Service) stamp() string { return s.now().UTC().Format(db.TimeLayout) }
-
 func userFromRow(id int64, username, displayName string, email *string, role string, disabled, hasPassword, totp int64, created string) User {
 	return User{
 		ID: id, Username: username, DisplayName: displayName, Email: email, Role: role,
@@ -221,7 +219,7 @@ func (s *Service) UpdateMe(ctx context.Context, id int64, in UpdateMeInput) (Me,
 		if len(fields) > 0 {
 			return httpx.Validation("invalid profile", fields)
 		}
-		now := s.stamp()
+		now := db.FormatTime(s.now())
 		if err := q.UpdateUserProfile(ctx, dbgen.UpdateUserProfileParams{DisplayName: displayName, Email: email, UpdatedAt: now, ID: id}); err != nil {
 			return fmt.Errorf("update user: %w", err)
 		}
@@ -261,7 +259,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (User, error) {
 	}
 	var id int64
 	err = s.DB.InTx(ctx, func(tx *sql.Tx) error {
-		id, err = createAccount(ctx, db.Q(tx), in, &hash, s.stamp())
+		id, err = createAccount(ctx, db.Q(tx), in, &hash, db.FormatTime(s.now()))
 		return err
 	})
 	if err != nil {
@@ -382,9 +380,9 @@ func (s *Service) Update(ctx context.Context, actor httpx.User, keepSession, id 
 				return err
 			}
 		}
-		now := s.stamp()
+		now := db.FormatTime(s.now())
 		err = q.UpdateUserAccount(ctx, dbgen.UpdateUserAccountParams{
-			DisplayName: displayName, Email: email, Role: role, Disabled: boolToInt(disabled), UpdatedAt: now, ID: id,
+			DisplayName: displayName, Email: email, Role: role, Disabled: db.Flag(disabled), UpdatedAt: now, ID: id,
 		})
 		if err != nil {
 			return fmt.Errorf("update user: %w", err)
@@ -481,13 +479,6 @@ func requireOtherAdmin(ctx context.Context, q *dbgen.Queries, id int64) error {
 		return errLastAdmin
 	}
 	return nil
-}
-
-func boolToInt(b bool) int64 {
-	if b {
-		return 1
-	}
-	return 0
 }
 
 func cleanDisplayName(s string) (string, error) {

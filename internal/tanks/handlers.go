@@ -7,16 +7,6 @@ import (
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
 )
 
-type handlerFunc func(w http.ResponseWriter, r *http.Request) error
-
-func (s *Service) handle(h handlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if err := h(w, r); err != nil {
-			httpx.Fail(s.Logger, w, r, err)
-		}
-	}
-}
-
 func pathTankID(r *http.Request) (int64, error) {
 	id, ok := httpx.PathID(r, "id")
 	if !ok {

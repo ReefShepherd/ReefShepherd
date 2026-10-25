@@ -112,9 +112,6 @@ func WriteError(w http.ResponseWriter, err error) {
 func Fail(logger *slog.Logger, w http.ResponseWriter, r *http.Request, err error) {
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
-		if logger == nil {
-			logger = slog.Default()
-		}
 		logger.LogAttrs(r.Context(), slog.LevelError, "request failed",
 			slog.String("method", r.Method),
 			slog.String("path", r.URL.Path),

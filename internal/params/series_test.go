@@ -165,7 +165,7 @@ func TestRoutesRegistersTheEndpointsOnAMux(t *testing.T) {
 	e := newEnv(t)
 	mux := http.NewServeMux()
 	var hooked []Result
-	Routes(mux, Deps{DB: e.db, Settings: e.store, OnResultCreated: func(_ context.Context, r Result) { hooked = append(hooked, r) }})
+	Routes(mux, Deps{DB: e.db, Settings: e.store, Logger: testutil.Logger(e.t), OnResultCreated: func(_ context.Context, r Result) { hooked = append(hooked, r) }})
 	signedIn := testutil.AsUser(e.userID, "")
 	tank, ph := e.addTank("Routes"), e.preset("ph")
 

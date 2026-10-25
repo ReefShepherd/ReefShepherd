@@ -7,18 +7,6 @@ import (
 	"testing"
 )
 
-func TestRequireUser(t *testing.T) {
-	r := httptest.NewRequest(http.MethodGet, "/", nil)
-	var apiErr *APIError
-	if _, err := RequireUser(r); !errors.As(err, &apiErr) || apiErr.Status != http.StatusUnauthorized {
-		t.Fatalf("anonymous RequireUser error = %v, want a 401", err)
-	}
-	signedIn := r.WithContext(WithUser(r.Context(), User{ID: 7, Username: "jayce"}))
-	if u, err := RequireUser(signedIn); err != nil || u.ID != 7 {
-		t.Errorf("signed-in RequireUser = %+v, %v; want user 7", u, err)
-	}
-}
-
 func TestIncludeArchived(t *testing.T) {
 	cases := map[string]struct {
 		want bool

@@ -69,6 +69,11 @@ func AsUser(id int64, role string) ReqOpt {
 	}
 }
 
+// WithHeader sets a request header, replacing any value it already has.
+func WithHeader(name, value string) ReqOpt {
+	return func(r *http.Request) { r.Header.Set(name, value) }
+}
+
 // DoJSON serves a request with body encoded as JSON (no body when nil) and returns the recorded response.
 func DoJSON(t testing.TB, h http.Handler, method, path string, body any, opts ...ReqOpt) *httptest.ResponseRecorder {
 	t.Helper()

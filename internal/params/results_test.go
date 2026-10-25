@@ -193,18 +193,6 @@ func tooMany(pid int64) []entry {
 	return out
 }
 
-func TestPostingResultsNeedsASignedInUser(t *testing.T) {
-	e := newEnv(t)
-	tank, ph := e.addTank("Anonymous"), e.preset("ph")
-	r := e.doOn(e.bare, http.MethodPost, tankPath(tank, "/results"), map[string]any{"results": []entry{val(ph, 8)}})
-	if r.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, body %s", r.Code, r.Body)
-	}
-	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM test_results`); n != 0 {
-		t.Errorf("%d results stored without a user", n)
-	}
-}
-
 func TestOnResultCreatedRunsAfterCommitForEachResult(t *testing.T) {
 	e := newEnv(t)
 	tank, ph, calcium := e.addTank("Hook"), e.preset("ph"), e.preset("calcium")

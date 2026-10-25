@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/reefshepherd/reefshepherd/internal/auth/password"
 	"github.com/reefshepherd/reefshepherd/internal/db"
@@ -14,9 +13,13 @@ import (
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
 )
 
-// tooManyAttempts is the 429 sent while a username or address is locked out.
-func tooManyAttempts(wait time.Duration) *httpx.APIError {
-	return httpx.TooManyRequests("too many failed attempts, try again later", wait)
+// beginAttempt counts one guess against the username and the request's address, answering 429 while either is locked out.
+func (s *Service) beginAttempt(r *http.Request, username string) (attempt, error) {
+	try, wait := s.limiter.begin(httpx.ClientIP(r, s.Config.TrustedProxies), normalizeUsername(username))
+	if wait > 0 {
+		return attempt{}, httpx.TooManyRequests("too many failed attempts, try again later", wait)
+	}
+	return try, nil
 }
 
 // ConfirmPassword checks a signed-in user's own password, counting a mistake against the same limits as a login; a failure is an *httpx.APIError whose field is field.
@@ -28,10 +31,9 @@ func (s *Service) ConfirmPassword(ctx context.Context, r *http.Request, userID i
 	if u.PasswordHash == nil {
 		return httpx.Validation("this account has no password", map[string]string{field: "this account has no password"})
 	}
-	ip := httpx.ClientIP(r, s.Config.TrustedProxies)
-	try, wait := s.limiter.begin(ip, normalizeUsername(u.Username))
-	if wait > 0 {
-		return tooManyAttempts(wait)
+	try, err := s.beginAttempt(r, u.Username)
+	if err != nil {
+		return err
 	}
 	ok, rehash, err := s.Passwords.Verify(ctx, plain, *u.PasswordHash)
 	if err != nil {
@@ -54,15 +56,8 @@ func (s *Service) rehash(ctx context.Context, userID int64, plain, old string) {
 		_, err = db.Q(s.DB.W).RehashPassword(ctx, dbgen.RehashPasswordParams{PasswordHash: &fresh, ID: userID, PasswordHash_2: &old})
 	}
 	if err != nil {
-		s.logger().Warn("upgrade password hash", slog.Int64("user_id", userID), slog.Any("error", err))
+		s.Logger.Warn("upgrade password hash", slog.Int64("user_id", userID), slog.Any("error", err))
 	}
-}
-
-func (s *Service) logger() *slog.Logger {
-	if s.Logger != nil {
-		return s.Logger
-	}
-	return slog.Default()
 }
 
 // ChangePassword sets a new password after checking the current one, which a passwordless account may omit, and ends the user's other sessions.
@@ -89,7 +84,7 @@ func (s *Service) ChangePassword(ctx context.Context, r *http.Request, userID in
 
 // SetPassword stores a new password hash and ends the user's sessions except the one with id keep, together or not at all.
 func (s *Service) SetPassword(ctx context.Context, userID int64, hash string, keep int64) error {
-	now := formatTime(s.now())
+	now := db.FormatTime(s.now())
 	return s.DB.InTx(ctx, func(tx *sql.Tx) error {
 		q := db.Q(tx)
 		err := q.SetUserPassword(ctx, dbgen.SetUserPasswordParams{PasswordHash: &hash, PasswordChangedAt: &now, UpdatedAt: now, ID: userID})

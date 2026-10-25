@@ -103,7 +103,7 @@ func (s *Service) BeginTOTP(ctx context.Context, userID int64, username string) 
 		return Enrollment{}, fmt.Errorf("encode qr code: %w", err)
 	}
 	rows, err := db.Q(s.DB.W).StartTOTPEnrollment(ctx, dbgen.StartTOTPEnrollmentParams{
-		UserID: userID, Secret: key.Secret(), CreatedAt: formatTime(s.now()),
+		UserID: userID, Secret: key.Secret(), CreatedAt: db.FormatTime(s.now()),
 	})
 	if err != nil {
 		return Enrollment{}, fmt.Errorf("store totp secret: %w", err)
@@ -134,7 +134,7 @@ func (s *Service) ConfirmTOTP(ctx context.Context, userID int64, code string) ([
 		if !ok {
 			return ErrBadCode
 		}
-		if _, err := q.ConfirmTOTP(ctx, dbgen.ConfirmTOTPParams{ConfirmedAt: ptr(formatTime(now)), LastUsedStep: step, UserID: userID}); err != nil {
+		if _, err := q.ConfirmTOTP(ctx, dbgen.ConfirmTOTPParams{ConfirmedAt: ptr(db.FormatTime(now)), LastUsedStep: step, UserID: userID}); err != nil {
 			return fmt.Errorf("confirm totp: %w", err)
 		}
 		codes, err = replaceRecoveryCodes(ctx, q, userID, now)
@@ -212,11 +212,9 @@ func (s *Service) ConfirmTOTPCode(ctx context.Context, r *http.Request, userID i
 	if err != nil {
 		return fmt.Errorf("read user: %w", err)
 	}
-	ip := httpx.ClientIP(r, s.Config.TrustedProxies)
-	name := normalizeUsername(u.Username)
-	try, wait := s.limiter.begin(ip, name)
-	if wait > 0 {
-		return tooManyAttempts(wait)
+	try, err := s.beginAttempt(r, u.Username)
+	if err != nil {
+		return err
 	}
 	ok, err := s.verifyTOTP(ctx, userID, code)
 	if err != nil {
@@ -232,7 +230,7 @@ func (s *Service) ConfirmTOTPCode(ctx context.Context, r *http.Request, userID i
 // verifyRecoveryCode spends a one-time recovery code.
 func (s *Service) verifyRecoveryCode(ctx context.Context, userID int64, code string) (bool, error) {
 	n, err := db.Q(s.DB.W).UseRecoveryCode(ctx, dbgen.UseRecoveryCodeParams{
-		UsedAt: ptr(formatTime(s.now())), UserID: userID, CodeHash: hashRecoveryCode(code),
+		UsedAt: ptr(db.FormatTime(s.now())), UserID: userID, CodeHash: hashRecoveryCode(code),
 	})
 	if err != nil {
 		return false, fmt.Errorf("use recovery code: %w", err)
@@ -277,7 +275,7 @@ func replaceRecoveryCodes(ctx context.Context, q *dbgen.Queries, userID int64, n
 		}
 		codes[i] = string(raw[:recoveryHalf]) + "-" + string(raw[recoveryHalf:])
 		err := q.InsertRecoveryCode(ctx, dbgen.InsertRecoveryCodeParams{
-			UserID: userID, CodeHash: hashRecoveryCode(codes[i]), CreatedAt: formatTime(now),
+			UserID: userID, CodeHash: hashRecoveryCode(codes[i]), CreatedAt: db.FormatTime(now),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("store recovery code: %w", err)

@@ -57,8 +57,6 @@ func NewService(deps Deps) *Service {
 	return &Service{Deps: deps, now: time.Now}
 }
 
-func (s *Service) stamp() string { return s.now().UTC().Format(db.TimeLayout) }
-
 // volumeUnit returns the display unit tank volumes are shown and entered in.
 func (s *Service) volumeUnit(ctx context.Context) (units.Unit, error) {
 	u, err := s.Settings.GetUnit(ctx, units.Volume)
@@ -87,11 +85,7 @@ func (s *Service) List(ctx context.Context, includeArchived bool) ([]Tank, error
 	if err != nil {
 		return nil, err
 	}
-	flag := int64(0)
-	if includeArchived {
-		flag = 1
-	}
-	rows, err := db.Q(s.DB.R).ListTanks(ctx, flag)
+	rows, err := db.Q(s.DB.R).ListTanks(ctx, db.Flag(includeArchived))
 	if err != nil {
 		return nil, fmt.Errorf("list tanks: %w", err)
 	}
@@ -182,7 +176,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Tank, error) {
 		if len(fields) > 0 {
 			return httpx.Validation("invalid tank", fields)
 		}
-		now := s.stamp()
+		now := db.FormatTime(s.now())
 		created, err = q.CreateTank(ctx, dbgen.CreateTankParams{
 			Name: name, TankType: tankType, VolumeLiters: liters, StartedOn: startedOn, Note: note, CreatedAt: now, UpdatedAt: now,
 		})
@@ -256,7 +250,7 @@ func (s *Service) Update(ctx context.Context, id int64, in UpdateInput) (Tank, e
 		fields := map[string]string{}
 		p := dbgen.UpdateTankParams{
 			ID: id, Name: cur.Name, TankType: cur.TankType, VolumeLiters: cur.VolumeLiters,
-			StartedOn: cur.StartedOn, Note: cur.Note, SortOrder: cur.SortOrder, UpdatedAt: s.stamp(),
+			StartedOn: cur.StartedOn, Note: cur.Note, SortOrder: cur.SortOrder, UpdatedAt: db.FormatTime(s.now()),
 		}
 		if in.Name != nil {
 			if p.Name, err = cleanName(*in.Name); err != nil {
@@ -316,7 +310,7 @@ func (s *Service) setArchived(ctx context.Context, id int64, archived bool) (Tan
 	if err != nil {
 		return Tank{}, err
 	}
-	now := s.stamp()
+	now := db.FormatTime(s.now())
 	var row dbgen.Tank
 	err = s.DB.InTx(ctx, func(tx *sql.Tx) error {
 		q := db.Q(tx)

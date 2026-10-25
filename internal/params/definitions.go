@@ -46,11 +46,7 @@ func definitionOf(d *display, def dbgen.ParameterDefinition) (Definition, error)
 
 // ListDefinitions returns the parameter definitions, archived ones only when asked for.
 func (s *Service) ListDefinitions(ctx context.Context, includeArchived bool) ([]Definition, error) {
-	include := int64(0)
-	if includeArchived {
-		include = 1
-	}
-	rows, err := db.Q(s.r).ListParameterDefinitions(ctx, include)
+	rows, err := db.Q(s.r).ListParameterDefinitions(ctx, db.Flag(includeArchived))
 	if err != nil {
 		return nil, fmt.Errorf("list parameter definitions: %w", err)
 	}
@@ -108,7 +104,7 @@ func (s *Service) CreateDefinition(ctx context.Context, in CreateDefinitionInput
 		if err := checkNameFree(ctx, q, name, 0); err != nil {
 			return err
 		}
-		now := s.stamp()
+		now := db.FormatTime(s.now())
 		var err error
 		id, err = q.CreateCustomParameter(ctx, dbgen.CreateCustomParameterParams{
 			Name: name, UnitLabel: label, Decimals: decimals,
@@ -188,7 +184,7 @@ func (s *Service) UpdateDefinition(ctx context.Context, id int64, in UpdateDefin
 		if _, err := q.UpdateParameterDefinition(ctx, dbgen.UpdateParameterDefinitionParams{
 			Name: name, UnitLabel: label, Decimals: decimals,
 			DefaultLow: low, DefaultHigh: high, DefaultTestIntervalDays: interval,
-			UpdatedAt: s.stamp(), ID: id,
+			UpdatedAt: db.FormatTime(s.now()), ID: id,
 		}); err != nil {
 			return fmt.Errorf("update parameter definition: %w", err)
 		}
@@ -216,10 +212,10 @@ func (s *Service) SetDefinitionArchived(ctx context.Context, id int64, archived 
 		}
 		var at *string
 		if archived {
-			now := s.stamp()
+			now := db.FormatTime(s.now())
 			at = &now
 		}
-		if _, err := q.SetParameterArchived(ctx, dbgen.SetParameterArchivedParams{ArchivedAt: at, UpdatedAt: s.stamp(), ID: id}); err != nil {
+		if _, err := q.SetParameterArchived(ctx, dbgen.SetParameterArchivedParams{ArchivedAt: at, UpdatedAt: db.FormatTime(s.now()), ID: id}); err != nil {
 			return fmt.Errorf("set parameter archived: %w", err)
 		}
 		return nil

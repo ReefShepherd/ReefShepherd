@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/reefshepherd/reefshepherd/internal/db"
+	"github.com/reefshepherd/reefshepherd/internal/httpx"
 	"github.com/reefshepherd/reefshepherd/internal/settings"
 )
 
@@ -25,19 +26,20 @@ func Routes(mux *http.ServeMux, deps Deps) {
 }
 
 func (s *Service) register(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/parameters", s.handle(s.listParameters))
-	mux.HandleFunc("POST /api/v1/parameters", s.handle(s.createParameter))
-	mux.HandleFunc("PATCH /api/v1/parameters/{id}", s.handle(s.patchParameter))
-	mux.HandleFunc("POST /api/v1/parameters/{id}/archive", s.handle(s.archiveParameter))
-	mux.HandleFunc("POST /api/v1/parameters/{id}/unarchive", s.handle(s.unarchiveParameter))
-	mux.HandleFunc("DELETE /api/v1/parameters/{id}", s.handle(s.deleteParameter))
+	handle := func(h httpx.HandlerFunc) http.Handler { return httpx.Handle(s.Logger, h) }
+	mux.Handle("GET /api/v1/parameters", handle(s.listParameters))
+	mux.Handle("POST /api/v1/parameters", handle(s.createParameter))
+	mux.Handle("PATCH /api/v1/parameters/{id}", handle(s.patchParameter))
+	mux.Handle("POST /api/v1/parameters/{id}/archive", handle(s.archiveParameter))
+	mux.Handle("POST /api/v1/parameters/{id}/unarchive", handle(s.unarchiveParameter))
+	mux.Handle("DELETE /api/v1/parameters/{id}", handle(s.deleteParameter))
 
-	mux.HandleFunc("GET /api/v1/tanks/{id}/parameters", s.handle(s.listTankParameters))
-	mux.HandleFunc("PUT /api/v1/tanks/{id}/parameters/{pid}", s.handle(s.putTankParameter))
-	mux.HandleFunc("GET /api/v1/tanks/{id}/parameters/{pid}/series", s.handle(s.getSeries))
+	mux.Handle("GET /api/v1/tanks/{id}/parameters", handle(s.listTankParameters))
+	mux.Handle("PUT /api/v1/tanks/{id}/parameters/{pid}", handle(s.putTankParameter))
+	mux.Handle("GET /api/v1/tanks/{id}/parameters/{pid}/series", handle(s.getSeries))
 
-	mux.HandleFunc("POST /api/v1/tanks/{id}/results", s.handle(s.createResults))
-	mux.HandleFunc("GET /api/v1/tanks/{id}/results", s.handle(s.listResults))
-	mux.HandleFunc("PATCH /api/v1/results/{id}", s.handle(s.patchResult))
-	mux.HandleFunc("DELETE /api/v1/results/{id}", s.handle(s.deleteResult))
+	mux.Handle("POST /api/v1/tanks/{id}/results", handle(s.createResults))
+	mux.Handle("GET /api/v1/tanks/{id}/results", handle(s.listResults))
+	mux.Handle("PATCH /api/v1/results/{id}", handle(s.patchResult))
+	mux.Handle("DELETE /api/v1/results/{id}", handle(s.deleteResult))
 }

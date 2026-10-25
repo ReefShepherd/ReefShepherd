@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"text/tabwriter"
@@ -78,7 +79,7 @@ func runAdmin(ctx context.Context, args []string, env config.LookupFunc, stdout,
 	if !ok {
 		return code
 	}
-	e, err := openAdminEnv(ctx, cfg)
+	e, err := openAdminEnv(ctx, cfg, app.NewLogger(stderr, cfg.LogLevel, cfg.LogFormat))
 	if err != nil {
 		fmt.Fprintf(stderr, "reefshepherd admin %s: %v\n", sub, err)
 		return 1
@@ -102,7 +103,7 @@ func runAdmin(ctx context.Context, args []string, env config.LookupFunc, stdout,
 	return 0
 }
 
-func openAdminEnv(ctx context.Context, cfg config.Config) (*adminEnv, error) {
+func openAdminEnv(ctx context.Context, cfg config.Config, logger *slog.Logger) (*adminEnv, error) {
 	path := filepath.Join(cfg.DataDir, app.DBFileName)
 	if _, err := os.Stat(path); err != nil {
 		return nil, fmt.Errorf("no database at %s (is --data-dir right?): %w", path, err)
@@ -117,10 +118,10 @@ func openAdminEnv(ctx context.Context, cfg config.Config) (*adminEnv, error) {
 		return nil, errors.New("the database has not been set up yet; start the server once first")
 	}
 	store := settings.NewStore(database)
-	authSvc := auth.NewService(auth.Deps{DB: database, Settings: store, Passwords: password.NewHasher(password.DefaultParams()), Config: cfg})
+	authSvc := auth.NewService(auth.Deps{DB: database, Settings: store, Passwords: password.NewHasher(password.DefaultParams()), Config: cfg, Logger: logger})
 	return &adminEnv{
 		cfg: cfg, db: database, store: store, auth: authSvc,
-		users: users.NewService(users.Deps{DB: database, Settings: store, Auth: authSvc}),
+		users: users.NewService(users.Deps{DB: database, Settings: store, Auth: authSvc, Logger: logger}),
 	}, nil
 }
 

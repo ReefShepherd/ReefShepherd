@@ -232,8 +232,8 @@ type limiter struct {
 	lastWarn time.Time
 }
 
-func newLimiter(now func() time.Time) *limiter {
-	return &limiter{now: now, log: slog.Default(), ips: newTable(sketchWidth), names: newTable(sketchWidth)}
+func newLimiter(now func() time.Time, log *slog.Logger) *limiter {
+	return &limiter{now: now, log: log, ips: newTable(sketchWidth), names: newTable(sketchWidth)}
 }
 
 // lockout is how long a key stays locked after its nth failure, doubling from 30 seconds up to 15 minutes.

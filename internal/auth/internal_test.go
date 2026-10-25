@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/pquerna/otp/totp"
+
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 )
 
 func TestLockoutSchedule(t *testing.T) {
@@ -103,7 +105,7 @@ func recordFailure(l *limiter, ip netip.Addr, name string) {
 
 func TestLimiterMemoryIsBounded(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	l := newLimiter(func() time.Time { return now })
+	l := newLimiter(func() time.Time { return now }, testutil.Logger(t))
 	ip := netip.MustParseAddr("192.0.2.1")
 	for i := range maxTracked + 500 {
 		now = now.Add(time.Millisecond)
@@ -126,7 +128,7 @@ func TestLimiterMemoryIsBounded(t *testing.T) {
 
 func TestLimiterEvictsStaleEntriesBeforeLiveOnes(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	l := newLimiter(func() time.Time { return now })
+	l := newLimiter(func() time.Time { return now }, testutil.Logger(t))
 	ip := netip.MustParseAddr("192.0.2.1")
 	// The veteran's last failure is the oldest of all, but its 15 minute lock keeps it live for 29 minutes.
 	for range 10 {
@@ -151,7 +153,7 @@ func TestLimiterEvictsStaleEntriesBeforeLiveOnes(t *testing.T) {
 
 func TestLimiterTruncatesHugeKeys(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	l := newLimiter(func() time.Time { return now })
+	l := newLimiter(func() time.Time { return now }, testutil.Logger(t))
 	ip := netip.MustParseAddr("192.0.2.1")
 	recordFailure(l, ip, strings.Repeat("a", 100000))
 	for k := range l.names.own {
@@ -163,7 +165,7 @@ func TestLimiterTruncatesHugeKeys(t *testing.T) {
 
 func TestBeginCountsTheTryAtOnceAndRefusesWhileLocked(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	l := newLimiter(func() time.Time { return now })
+	l := newLimiter(func() time.Time { return now }, testutil.Logger(t))
 	ip := netip.MustParseAddr("192.0.2.1")
 
 	for i := 1; i <= freeFailures; i++ {
@@ -199,7 +201,7 @@ func TestBeginCountsTheTryAtOnceAndRefusesWhileLocked(t *testing.T) {
 
 func TestSucceedAndPartialSettleATry(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	l := newLimiter(func() time.Time { return now })
+	l := newLimiter(func() time.Time { return now }, testutil.Logger(t))
 	ip := netip.MustParseAddr("192.0.2.1")
 
 	for range 3 {
@@ -238,7 +240,7 @@ func TestSucceedAndPartialSettleATry(t *testing.T) {
 
 func TestSettlingTheTryThatSetTheLockLiftsIt(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	l := newLimiter(func() time.Time { return now })
+	l := newLimiter(func() time.Time { return now }, testutil.Logger(t))
 	ip := netip.MustParseAddr("192.0.2.1")
 	for range freeFailures - 1 {
 		recordFailure(l, ip, "alice")
@@ -305,7 +307,7 @@ func addrs(block, n int) []netip.Addr {
 
 func TestLockedUsernameSurvivesAFullCapFlood(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	l := newLimiter(func() time.Time { return now })
+	l := newLimiter(func() time.Time { return now }, testutil.Logger(t))
 	ips := addrs(100, freeFailures+2)
 	for i := range freeFailures {
 		l.begin(ips[i], "alice")
@@ -325,7 +327,7 @@ func TestLockedUsernameSurvivesAFullCapFlood(t *testing.T) {
 
 func TestUsernameOnProbationSurvivesAFullCapFlood(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	l := newLimiter(func() time.Time { return now })
+	l := newLimiter(func() time.Time { return now }, testutil.Logger(t))
 	ips := addrs(100, freeFailures+2)
 	for i := range freeFailures {
 		l.begin(ips[i], "alice")
@@ -347,7 +349,7 @@ func TestUsernameOnProbationSurvivesAFullCapFlood(t *testing.T) {
 
 func TestLockedAddressSurvivesAFullCapFlood(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	l := newLimiter(func() time.Time { return now })
+	l := newLimiter(func() time.Time { return now }, testutil.Logger(t))
 	home := netip.MustParseAddr("192.0.2.50")
 	for i := range freeFailures {
 		l.begin(home, "user"+strconv.Itoa(i))
@@ -365,7 +367,7 @@ func TestLockedAddressSurvivesAFullCapFlood(t *testing.T) {
 // TestFailuresSurviveRepeatedFloods replays the attack that beat the capped map: a few guesses, a flood that fills the exact table, and again.
 func TestFailuresSurviveRepeatedFloods(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	l := newLimiter(func() time.Time { return now })
+	l := newLimiter(func() time.Time { return now }, testutil.Logger(t))
 	ips := addrs(100, 13)
 	var admitted []int
 	for cycle := range 3 {
@@ -393,7 +395,7 @@ func TestFailuresSurviveRepeatedFloods(t *testing.T) {
 
 func TestFullTableOfLocksStillAdmitsNewKeysAndKeepsEveryLock(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	l := newLimiter(func() time.Time { return now })
+	l := newLimiter(func() time.Time { return now }, testutil.Logger(t))
 	newcomer := netip.MustParseAddr("203.0.113.1")
 	flood(l, maxTracked, freeFailures, "newcomer", newcomer)
 	if len(l.names.own) != maxTracked || len(l.ips.own) != maxTracked {
@@ -436,9 +438,8 @@ func TestFullTableOfLocksStillAdmitsNewKeysAndKeepsEveryLock(t *testing.T) {
 // TestCollisionsOnlyTightenTheLimit uses a one-cell-wide sketch so every username shares cells, the worst case for a real user.
 func TestCollisionsOnlyTightenTheLimit(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	l := newLimiter(func() time.Time { return now })
+	l := newLimiter(func() time.Time { return now }, testutil.Logger(t))
 	l.names = newTable(1)
-	l.log = slog.New(slog.DiscardHandler)
 	ips := addrs(100, 8)
 	for i := range 4 {
 		l.begin(ips[i], "alice")
@@ -468,9 +469,8 @@ func TestCollisionsOnlyTightenTheLimit(t *testing.T) {
 
 func TestRefusalByOtherKeysFailuresIsLoggedOncePerMinute(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	l := newLimiter(func() time.Time { return now })
 	var buf bytes.Buffer
-	l.log = slog.New(slog.NewTextHandler(&buf, nil))
+	l := newLimiter(func() time.Time { return now }, slog.New(slog.NewTextHandler(&buf, nil)))
 	ips := addrs(100, 8)
 
 	// A refusal the key earned itself is routine and not logged.

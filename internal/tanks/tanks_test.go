@@ -91,7 +91,7 @@ func TestRequireFindsTanksArchivedOrNot(t *testing.T) {
 
 func TestPresetParametersStartTheirScheduleWhenTheTankIsCreated(t *testing.T) {
 	e := newEnv(t)
-	svc := NewService(Deps{DB: e.db, Settings: e.settings})
+	svc := NewService(Deps{DB: e.db, Settings: e.settings, Logger: testutil.Logger(e.t)})
 	svc.now = func() time.Time { return time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC) }
 	tank, err := svc.Create(t.Context(), CreateInput{Name: "Reef", Presets: []string{"ph", "alkalinity"}})
 	if err != nil {

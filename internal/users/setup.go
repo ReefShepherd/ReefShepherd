@@ -86,7 +86,7 @@ func (s *Service) setup(w http.ResponseWriter, r *http.Request) error {
 		if done || n > 0 {
 			return errSetupDone
 		}
-		now := s.stamp()
+		now := db.FormatTime(s.now())
 		in := CreateInput{Username: req.Username, DisplayName: req.DisplayName, Role: httpx.RoleAdmin}
 		if id, err = createAccount(ctx, q, in, hash, now); err != nil {
 			return err

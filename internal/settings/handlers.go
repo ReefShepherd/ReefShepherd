@@ -28,26 +28,18 @@ type Deps struct {
 // PublicRoutes registers the endpoints that work without a session; the unit catalog holds nothing private and the setup wizard needs it before anyone signs in.
 func PublicRoutes(mux *http.ServeMux, deps Deps) {
 	h := &handlers{Deps: deps}
-	mux.HandleFunc("GET /api/v1/units", h.handle(h.getUnits))
+	mux.Handle("GET /api/v1/units", httpx.Handle(deps.Logger, h.getUnits))
 }
 
 // Routes registers the settings endpoints; the caller wraps mux in the sign-in check, and the settings routes also require an admin.
 func Routes(mux *http.ServeMux, deps Deps) {
 	h := &handlers{Deps: deps}
-	mux.Handle("GET /api/v1/settings", auth.RequireAdmin(h.handle(h.getSettings)))
-	mux.Handle("PATCH /api/v1/settings", auth.RequireAdmin(h.handle(h.patchSettings)))
+	mux.Handle("GET /api/v1/settings", auth.RequireAdmin(httpx.Handle(deps.Logger, h.getSettings)))
+	mux.Handle("PATCH /api/v1/settings", auth.RequireAdmin(httpx.Handle(deps.Logger, h.patchSettings)))
 }
 
 type handlers struct {
 	Deps
-}
-
-func (h *handlers) handle(fn func(w http.ResponseWriter, r *http.Request) error) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if err := fn(w, r); err != nil {
-			httpx.Fail(h.Logger, w, r, err)
-		}
-	}
 }
 
 func (h *handlers) getUnits(w http.ResponseWriter, _ *http.Request) error {

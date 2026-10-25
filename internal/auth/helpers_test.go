@@ -2,11 +2,9 @@ package auth_test
 
 import (
 	"crypto/sha256"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
-	"strings"
 	"testing"
 	"time"
 
@@ -48,7 +46,7 @@ func newEnvParams(t *testing.T, cfg config.Config, params password.Params) *env 
 	t.Helper()
 	database := testutil.OpenDB(t)
 	e := &env{t: t, db: database, store: settings.NewStore(database), hasher: password.NewHasher(params), now: time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)}
-	e.svc = auth.NewService(auth.Deps{DB: database, Settings: e.store, Passwords: e.hasher, Config: cfg})
+	e.svc = auth.NewService(auth.Deps{DB: database, Settings: e.store, Passwords: e.hasher, Config: cfg, Logger: testutil.Logger(t)})
 	e.svc.SetClock(func() time.Time { return e.now })
 
 	mux := http.NewServeMux()
@@ -126,30 +124,18 @@ func (e *env) client() *client {
 
 func (c *client) do(method, path string, body any) *resp {
 	c.e.t.Helper()
-	var rd *strings.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			c.e.t.Fatal(err)
-		}
-		rd = strings.NewReader(string(b))
-	} else {
-		rd = strings.NewReader("")
-	}
-	r := httptest.NewRequest(method, path, rd)
-	r.RemoteAddr = c.ip + ":5000"
-	r.Header.Set("User-Agent", "test-browser")
-	if body != nil {
-		r.Header.Set("Content-Type", "application/json")
-	}
-	for k, vs := range c.header {
-		r.Header[k] = vs
-	}
-	if c.cookie != "" {
-		r.AddCookie(&http.Cookie{Name: auth.CookieName, Value: c.cookie})
-	}
-	rec := httptest.NewRecorder()
-	c.e.h.ServeHTTP(rec, r)
+	rec := testutil.DoJSON(c.e.t, c.e.h, method, path, body,
+		func(r *http.Request) { r.RemoteAddr = c.ip + ":5000" },
+		testutil.WithHeader("User-Agent", "test-browser"),
+		func(r *http.Request) {
+			for k, vs := range c.header {
+				r.Header[k] = vs
+			}
+			if c.cookie != "" {
+				r.AddCookie(&http.Cookie{Name: auth.CookieName, Value: c.cookie})
+			}
+		},
+	)
 	out := &resp{ResponseRecorder: rec, t: c.e.t}
 	if sc := out.sessionCookie(); sc != nil {
 		if sc.MaxAge < 0 || sc.Value == "" {
