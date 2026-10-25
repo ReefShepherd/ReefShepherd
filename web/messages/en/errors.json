@@ -1,0 +1,13 @@
+{
+  "$schema": "https://inlang.com/schema/inlang-message-format",
+  "api_error_network": "Could not reach the server. Check your connection and try again.",
+  "api_error_http": "The server returned an unexpected reply. Try again in a moment.",
+  "api_error_bad_response": "The server sent a reply that could not be read. Try again in a moment.",
+  "api_error_validation": "Some of the entered values are not valid.",
+  "api_error_unauthorized": "Your session has ended. Sign in again.",
+  "api_error_forbidden": "You do not have permission to do that.",
+  "api_error_not_found": "That item no longer exists.",
+  "api_error_conflict": "That conflicts with the current state. Reload and try again.",
+  "api_error_setup_required": "This instance has not been set up yet.",
+  "api_error_unknown": "Something went wrong. Try again in a moment."
+}
