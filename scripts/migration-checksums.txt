@@ -1,1 +1,2 @@
 # SHA-256 of every frozen migration as "<sum>  <path>", checked by scripts/check-migrations.sh and added with its --freeze option.
+3f42f39e5112b488a304828b325e2b4e8f4a6a0fe93525ac1206dfbd371b8f40  internal/db/migrations/00001_initial.sql
