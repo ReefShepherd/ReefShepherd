@@ -5,3 +5,4 @@ project.inlang
 src/lib/paraglide
 test-results
 playwright-report
+.vitest

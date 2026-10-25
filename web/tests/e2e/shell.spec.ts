@@ -1,11 +1,19 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type ConsoleMessage } from '@playwright/test';
 
 // /login is a bare route, so these checks do not depend on whether the instance has been set up.
+
+// The sign-in page asks /me whether anyone is already signed in, and a signed-out browser is answered with 401.
+function isSignedOutProbe(msg: ConsoleMessage): boolean {
+  return (
+    msg.text().includes('401') &&
+    new URL(msg.location().url, 'http://localhost').pathname === '/api/v1/me'
+  );
+}
 
 test('the built app loads with no CSP violations or console errors', async ({ page }) => {
   const problems: string[] = [];
   page.on('console', (msg) => {
-    if (msg.type() === 'error') problems.push(msg.text());
+    if (msg.type() === 'error' && !isSignedOutProbe(msg)) problems.push(msg.text());
   });
   await page.addInitScript(() => {
     document.addEventListener('securitypolicyviolation', (e) => {
@@ -19,7 +27,7 @@ test('the built app loads with no CSP violations or console errors', async ({ pa
 
   const violations = await page.evaluate(() => (window as unknown as { csp?: string[] }).csp ?? []);
   expect(violations).toEqual([]);
-  expect(problems.filter((p) => !p.includes('404'))).toEqual([]);
+  expect(problems).toEqual([]);
 });
 
 test('the stored theme is applied before first paint', async ({ page }) => {

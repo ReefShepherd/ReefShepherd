@@ -45,6 +45,7 @@ go.work.sum
 node_modules/
 /web/.svelte-kit/
 /web/test-results/
+/web/.vitest/
 /web/playwright-report/
 
 # Python bytecode from the repository check scripts

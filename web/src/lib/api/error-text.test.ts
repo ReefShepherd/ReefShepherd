@@ -12,7 +12,11 @@ const cases: [string, () => string][] = [
   ['forbidden', m.api_error_forbidden],
   ['not_found', m.api_error_not_found],
   ['conflict', m.api_error_conflict],
-  ['setup_required', m.api_error_setup_required]
+  ['setup_required', m.api_error_setup_required],
+  ['invalid_credentials', m.api_error_invalid_credentials],
+  ['invalid_code', m.api_error_invalid_code],
+  ['env_locked', m.api_error_env_locked],
+  ['too_many_requests', m.api_error_rate_limited_soon]
 ];
 
 describe('errorText', () => {
@@ -24,6 +28,12 @@ describe('errorText', () => {
     const texts = cases.map(([, message]) => message());
     expect(new Set(texts).size).toBe(texts.length);
     expect(texts).not.toContain(m.api_error_unknown());
+  });
+
+  it('tells a rate limited user how long to wait', () => {
+    const text = errorText(new ApiError(429, 'too_many_requests', 'slow', {}, 30));
+    expect(text).toBe(m.api_error_rate_limited({ wait: '30 seconds' }));
+    expect(text).toContain('30 seconds');
   });
 
   it('uses the default text for an unknown code', () => {

@@ -8,10 +8,15 @@ function json(status: number, body: unknown): Response {
   });
 }
 
-function setup(reply: () => Response | Promise<Response>, path = '/') {
+function setup(reply: () => Response | Promise<Response>, path = '/', search = '') {
   const fetchMock = vi.fn<typeof fetch>(async () => reply());
   const redirect = vi.fn<(to: string) => void>();
-  const api = createApi({ fetch: fetchMock, redirect, currentPath: () => path });
+  const api = createApi({
+    fetch: fetchMock,
+    redirect,
+    currentPath: () => path,
+    currentSearch: () => search
+  });
   return { api, fetchMock, redirect };
 }
 
@@ -102,6 +107,34 @@ describe('errors', () => {
     await expect(api.get('/tanks')).rejects.toMatchObject({ status: 502, code: 'http_error' });
   });
 
+  it('reads the Retry-After delay in seconds from a rate limit reply', async () => {
+    const { api } = setup(
+      () =>
+        new Response(JSON.stringify({ error: { code: 'too_many_requests', message: 'slow' } }), {
+          status: 429,
+          headers: { 'Content-Type': 'application/json', 'Retry-After': '30' }
+        })
+    );
+    await expect(api.post('/auth/login', {})).rejects.toMatchObject({
+      status: 429,
+      code: 'too_many_requests',
+      retryAfter: 30
+    });
+  });
+
+  it('leaves retryAfter undefined without a numeric Retry-After header', async () => {
+    const { api } = setup(
+      () =>
+        new Response('nope', {
+          status: 503,
+          headers: { 'Retry-After': 'Wed, 21 Oct 2026 07:28:00 GMT' }
+        })
+    );
+    const err = await api.get('/me').catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: 'http_error' });
+    expect((err as ApiError).retryAfter).toBeUndefined();
+  });
+
   it('maps a failed fetch to a network error with status 0', async () => {
     const { api } = setup(() => Promise.reject(new TypeError('Failed to fetch')));
     await expect(api.get('/tanks')).rejects.toMatchObject({ status: 0, code: 'network' });
@@ -121,6 +154,18 @@ describe('redirects', () => {
     );
     await expect(api.get('/me')).rejects.toMatchObject({ status: 401 });
     expect(redirect).toHaveBeenCalledExactlyOnceWith('/login');
+  });
+
+  it('asks the login page to come back to the page that was open', async () => {
+    const { api, redirect } = setup(
+      () => json(401, { error: { code: 'unauthorized', message: 'sign in' } }),
+      '/tanks/3/charts/5',
+      '?range=30d'
+    );
+    await expect(api.get('/me')).rejects.toMatchObject({ status: 401 });
+    expect(redirect).toHaveBeenCalledExactlyOnceWith(
+      '/login?next=%2Ftanks%2F3%2Fcharts%2F5%3Frange%3D30d'
+    );
   });
 
   it('does not redirect to /login when already on the login page', async () => {

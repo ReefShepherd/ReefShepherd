@@ -1,29 +1,14 @@
 import { getLocale } from '#lib/paraglide/runtime.js';
 import { emptyValue } from './number.js';
 
-let instanceTimeZone: string | undefined;
-
-/** Sets the IANA timezone every date is shown in; an unknown name clears it so the browser zone is used. */
-export function setInstanceTimeZone(timeZone: string | undefined): void {
-  try {
-    if (timeZone) new Intl.DateTimeFormat(undefined, { timeZone });
-    instanceTimeZone = timeZone || undefined;
-  } catch {
-    instanceTimeZone = undefined;
-  }
-}
-
 const dateTimeFormats = new Map<string, Intl.DateTimeFormat>();
 
-/** Formats an RFC 3339 timestamp as a short date and time in the instance timezone. */
-export function formatDateTime(
-  iso: string,
-  timeZone: string | undefined = instanceTimeZone
-): string {
+/** Formats an RFC 3339 timestamp as a short date and time in the given IANA timezone. */
+export function formatDateTime(iso: string, timeZone: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return emptyValue;
   const locale = getLocale();
-  const key = `${locale}|${timeZone ?? ''}`;
+  const key = `${locale}|${timeZone}`;
   let format = dateTimeFormats.get(key);
   if (!format) {
     format = new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short', timeZone });

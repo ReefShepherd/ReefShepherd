@@ -1,3 +1,4 @@
+import { loginUrl } from '#lib/auth/next.js';
 import { pathMatches } from '#lib/path.js';
 
 const base = '/api/v1';
@@ -10,13 +11,22 @@ export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
   readonly fields: FieldErrors;
+  /** Seconds the server asked the client to wait, from the Retry-After header; undefined when absent. */
+  readonly retryAfter: number | undefined;
 
-  constructor(status: number, code: string, message: string, fields: FieldErrors = {}) {
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    fields: FieldErrors = {},
+    retryAfter?: number
+  ) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
     this.fields = fields;
+    this.retryAfter = retryAfter;
   }
 }
 
@@ -45,6 +55,8 @@ export interface ApiDeps {
   /** Called with the page to show when the session or the instance needs attention. */
   redirect?: (to: string) => void;
   currentPath?: () => string;
+  /** The query string of the current page, with its leading question mark or empty. */
+  currentSearch?: () => string;
 }
 
 function buildUrl(path: string, query?: RequestOptions['query']): string {
@@ -57,24 +69,33 @@ function buildUrl(path: string, query?: RequestOptions['query']): string {
   return `${base}${path}${path.includes('?') ? '&' : '?'}${qs}`;
 }
 
+// Retry-After may also be an HTTP date; only the delay-seconds form is used.
+function readRetryAfter(res: Response): number | undefined {
+  const raw = res.headers.get('Retry-After');
+  if (raw === null || !/^\d+$/.test(raw.trim())) return undefined;
+  return Number(raw.trim());
+}
+
 async function readError(res: Response): Promise<ApiError> {
+  const retryAfter = readRetryAfter(res);
   let parsed: unknown;
   try {
     parsed = await res.json();
   } catch {
-    return new ApiError(res.status, 'http_error', `HTTP ${res.status}`);
+    return new ApiError(res.status, 'http_error', `HTTP ${res.status}`, {}, retryAfter);
   }
   const err = (parsed as { error?: { code?: unknown; message?: unknown; fields?: unknown } } | null)
     ?.error;
   if (!err || typeof err.code !== 'string') {
-    return new ApiError(res.status, 'http_error', `HTTP ${res.status}`);
+    return new ApiError(res.status, 'http_error', `HTTP ${res.status}`, {}, retryAfter);
   }
   const fields = err.fields && typeof err.fields === 'object' ? (err.fields as FieldErrors) : {};
   return new ApiError(
     res.status,
     err.code,
     typeof err.message === 'string' ? err.message : '',
-    fields
+    fields,
+    retryAfter
   );
 }
 
@@ -82,12 +103,14 @@ export function createApi(deps: ApiDeps = {}): Api {
   const doFetch = deps.fetch ?? ((input, init) => fetch(input, init));
   const redirect = deps.redirect ?? ((to) => location.assign(to));
   const currentPath = deps.currentPath ?? (() => location.pathname);
+  const currentSearch = deps.currentSearch ?? (() => location.search);
 
   // The error is still thrown after redirecting so callers stop their own work.
   function redirectFor(error: ApiError): void {
-    const to =
+    const target =
       error.code === 'setup_required' ? '/setup' : error.status === 401 ? '/login' : undefined;
-    if (to && !pathMatches(currentPath(), to)) redirect(to);
+    if (!target || pathMatches(currentPath(), target)) return;
+    redirect(target === '/login' ? loginUrl(currentPath() + currentSearch()) : target);
   }
 
   async function request<T>(

@@ -1,0 +1,132 @@
+{
+  "$schema": "https://inlang.com/schema/inlang-message-format",
+  "value_invalid_number": "Enter a number such as 7.9 or 7,9.",
+  "params_range_between": "{low} to {high}",
+  "params_range_max": "Up to {high}",
+  "params_range_min": "At least {low}",
+  "params_range_none": "No ideal range",
+  "params_range_order": "The low limit must not be above the high limit.",
+  "params_ideal_low": "Ideal low",
+  "params_ideal_high": "Ideal high",
+  "params_next_due": "Next test due",
+  "params_overdue_since": "Overdue since",
+  "params_move_up": "Move {name} up",
+  "params_move_down": "Move {name} down",
+  "params_settings_title": "Parameters",
+  "params_settings_intro": "Choose which parameters this tank tracks, their ideal ranges and how often to test them.",
+  "params_definitions_link": "Manage parameter definitions",
+  "params_def_title": "Parameter definitions",
+  "params_def_intro": "The built-in parameters are shared by all tanks. Add your own for anything else you measure, with its own unit label.",
+  "params_def_add": "Add a custom parameter",
+  "params_def_add_title": "New custom parameter",
+  "params_def_edit_title": "Edit custom parameter",
+  "params_def_create": "Create parameter",
+  "params_def_name": "Name",
+  "params_def_unit": "Unit label",
+  "params_def_unit_hint": "Shown after values, such as ppm. Leave it empty for a unitless value.",
+  "params_def_decimals": "Decimals",
+  "params_def_decimals_hint": "How many digits follow the decimal point when values are shown.",
+  "params_def_low": "Default ideal low",
+  "params_def_high": "Default ideal high",
+  "params_def_interval": "Default test interval in days",
+  "params_def_interval_hint": "Optional. Tanks that use this parameter start with a test due this many days after the last one.",
+  "params_def_interval_invalid": "Enter a whole number of days from 1 to {max}.",
+  "params_def_custom_title": "Custom parameters",
+  "params_def_custom_empty": "You have not added any custom parameters.",
+  "params_def_presets_title": "Built-in parameters",
+  "params_def_archived": "Archived",
+  "params_def_archive": "Archive",
+  "params_def_archive_question": "Archive {name}? It disappears from every tank but keeps its results.",
+  "params_def_restore": "Restore",
+  "params_def_delete_question": "Delete {name}?",
+  "params_def_delete_conflict": "A parameter with recorded results cannot be deleted. Archive it instead.",
+  "params_def_created": "{name} was added.",
+  "params_def_saved": "{name} was saved.",
+  "params_def_deleted": "{name} was deleted.",
+  "params_def_no_interval": "No default schedule",
+  "params_def_interval_summary": [
+    {
+      "declarations": ["input days", "local daysPlural = days: plural"],
+      "selectors": ["daysPlural"],
+      "match": {
+        "daysPlural=one": "Test every day",
+        "daysPlural=other": "Test every {days} days"
+      }
+    }
+  ],
+  "schedule_legend": "Schedule",
+  "schedule_kind": "Repeats",
+  "schedule_kind_none": "Never",
+  "schedule_kind_after_last": "A set number of days after the last time",
+  "schedule_kind_every_n_days": "Every few days from a start date",
+  "schedule_kind_weekly": "On chosen weekdays",
+  "schedule_kind_monthly": "On a day of the month",
+  "schedule_days_after": "Days after the last time",
+  "schedule_days_every": "Every how many days",
+  "schedule_weekdays": "Weekdays",
+  "schedule_every_weeks": "Every how many weeks",
+  "schedule_month_day": "Day of the month",
+  "schedule_month_day_hint": "In shorter months the last day is used instead.",
+  "schedule_anchor": "Start date",
+  "schedule_due_time": "Due at",
+  "schedule_problem_interval_days": "Enter a whole number of days, at least 1.",
+  "schedule_problem_weekdays": "Choose at least one weekday.",
+  "schedule_problem_interval_weeks": "Enter a whole number of weeks, at least 1.",
+  "schedule_problem_month_day": "Enter a day from 1 to 31.",
+  "schedule_problem_anchor_date": "Choose a start date.",
+  "schedule_problem_due_time": "Enter a time of day.",
+  "schedule_summary_none": "No schedule",
+  "schedule_summary_after_last": [
+    {
+      "declarations": ["input days", "local daysPlural = days: plural"],
+      "selectors": ["daysPlural"],
+      "match": {
+        "daysPlural=one": "1 day after the last time",
+        "daysPlural=other": "{days} days after the last time"
+      }
+    }
+  ],
+  "schedule_summary_every_n_days": [
+    {
+      "declarations": ["input days", "local daysPlural = days: plural"],
+      "selectors": ["daysPlural"],
+      "match": {
+        "daysPlural=one": "Every day from {date}",
+        "daysPlural=other": "Every {days} days from {date}"
+      }
+    }
+  ],
+  "schedule_summary_weekly": "Every week on {days}",
+  "schedule_summary_weekly_n": "Every {weeks} weeks on {days}, starting {date}",
+  "schedule_summary_monthly": "On day {day} of each month",
+  "schedule_summary_at": "{summary} at {time}",
+  "tests_time": "Date and time",
+  "tests_time_invalid": "Enter a valid date and time.",
+  "tests_value_for": "{name} value",
+  "tests_note_for": "{name} note",
+  "tests_note": "Note",
+  "tests_add_note": "Add a note",
+  "tests_value_needed": "Enter a value, or clear the note.",
+  "tests_last": "Last: {value}, {time}",
+  "tests_out_of_range": "Out of range",
+  "tests_save": "Save results",
+  "tests_nothing_entered": "Enter at least one value.",
+  "tests_saved": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Saved 1 result.",
+        "countPlural=other": "Saved {count} results."
+      }
+    }
+  ],
+  "tests_no_parameters": "No parameters are switched on for this tank yet.",
+  "tests_choose_parameters": "Choose parameters in the tank settings",
+  "tests_history_title": "Results history",
+  "tests_filter": "Show",
+  "tests_filter_all": "All parameters",
+  "tests_history_empty": "No results have been logged yet.",
+  "tests_load_more": "Load older results",
+  "tests_delete_question": "Delete the {name} result of {value}?"
+}

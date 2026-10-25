@@ -1,12 +1,11 @@
 <script lang="ts">
   import '../app.css';
   import { page } from '$app/state';
-  import { api } from '#lib/api/client.js';
   import Header from '#lib/components/shell/Header.svelte';
   import Nav from '#lib/components/shell/Nav.svelte';
   import { m } from '#lib/paraglide/messages.js';
   import { pathMatches } from '#lib/path.js';
-  import { isThemeName, theme } from '#lib/theme/theme.svelte.js';
+  import { session } from '#lib/session/session.svelte.js';
 
   let { children } = $props();
 
@@ -18,12 +17,7 @@
   $effect(() => {
     if (bare) return;
     // The client redirects on its own when sign-in or setup is needed, so other failures are left to the pages.
-    api
-      .get<{ theme?: unknown }>('/me')
-      .then((me) => {
-        if (isThemeName(me.theme)) theme.set(me.theme);
-      })
-      .catch(() => {});
+    session.ready().catch(() => {});
   });
 </script>
 

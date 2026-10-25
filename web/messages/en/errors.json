@@ -9,5 +9,10 @@
   "api_error_not_found": "That item no longer exists.",
   "api_error_conflict": "That conflicts with the current state. Reload and try again.",
   "api_error_setup_required": "This instance has not been set up yet.",
-  "api_error_unknown": "Something went wrong. Try again in a moment."
+  "api_error_unknown": "Something went wrong. Try again in a moment.",
+  "api_error_invalid_credentials": "The username or password is not correct.",
+  "api_error_invalid_code": "That code is not valid.",
+  "api_error_env_locked": "The server's environment sets this, so it cannot be changed here.",
+  "api_error_rate_limited": "Too many attempts. Try again in {wait}.",
+  "api_error_rate_limited_soon": "Too many attempts. Try again in a little while."
 }

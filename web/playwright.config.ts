@@ -1,8 +1,8 @@
 import { defineConfig } from '@playwright/test';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { e2eDataDir } from './tests/e2e/data-dir.js';
 
 const port = 8486;
+const dataDir = e2eDataDir();
 
 // End-to-end tests run against the built binary (make build), never the Vite dev server.
 export default defineConfig({
@@ -16,7 +16,8 @@ export default defineConfig({
     launchOptions: { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH || undefined }
   },
   webServer: {
-    command: `../bin/reefshepherd serve --dev --listen 127.0.0.1:${port} --data-dir ${join(tmpdir(), 'reefshepherd-e2e')}`,
+    // A fresh data directory every run, because the auth specs start from first-run setup.
+    command: `rm -rf '${dataDir}' && exec ../bin/reefshepherd serve --dev --listen 127.0.0.1:${port} --data-dir '${dataDir}'`,
     url: `http://127.0.0.1:${port}/healthz`,
     reuseExistingServer: false,
     timeout: 30_000

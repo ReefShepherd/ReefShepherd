@@ -1,11 +1,9 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { formatDateTime, relativeTime, setInstanceTimeZone } from './datetime.js';
+import { describe, expect, it } from 'vitest';
+import { formatDateTime, relativeTime } from './datetime.js';
 import { emptyValue } from './number.js';
 
 // Newer ICU versions put a narrow no-break space before AM and PM.
 const plain = (text: string) => text.replace(/\s/g, ' ');
-
-afterEach(() => setInstanceTimeZone(undefined));
 
 describe('formatDateTime', () => {
   it('renders the same instant in the requested timezone', () => {
@@ -15,19 +13,15 @@ describe('formatDateTime', () => {
     expect(plain(formatDateTime(iso, 'Pacific/Auckland'))).toBe('Mar 9, 2026, 1:00 AM');
   });
 
-  it('uses the instance timezone when none is given', () => {
-    setInstanceTimeZone('Asia/Tokyo');
-    expect(plain(formatDateTime('2026-01-01T00:00:00Z'))).toBe('Jan 1, 2026, 9:00 AM');
-  });
-
-  it('ignores an unknown instance timezone instead of throwing', () => {
-    setInstanceTimeZone('Asia/Tokyo');
-    setInstanceTimeZone('Not/AZone');
-    expect(() => formatDateTime('2026-01-01T00:00:00Z')).not.toThrow();
+  it('keeps a separate format for each zone', () => {
+    const iso = '2026-01-01T00:00:00Z';
+    expect(plain(formatDateTime(iso, 'Asia/Tokyo'))).toBe('Jan 1, 2026, 9:00 AM');
+    expect(plain(formatDateTime(iso, 'UTC'))).toBe('Jan 1, 2026, 12:00 AM');
+    expect(plain(formatDateTime(iso, 'Asia/Tokyo'))).toBe('Jan 1, 2026, 9:00 AM');
   });
 
   it('shows the empty marker for an invalid timestamp', () => {
-    expect(formatDateTime('nope')).toBe(emptyValue);
+    expect(formatDateTime('nope', 'UTC')).toBe(emptyValue);
   });
 });
 
