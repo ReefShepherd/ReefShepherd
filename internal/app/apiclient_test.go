@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +15,7 @@ import (
 	"github.com/reefshepherd/reefshepherd/internal/config"
 	"github.com/reefshepherd/reefshepherd/internal/db"
 	"github.com/reefshepherd/reefshepherd/internal/settings"
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 	"github.com/reefshepherd/reefshepherd/internal/webui"
 )
 
@@ -38,27 +38,11 @@ func newAPITestApp(t *testing.T, cfg config.Config) *testApp {
 	database := openTestDB(t)
 	store := settings.NewStore(database)
 	hasher := password.NewHasher(password.Params{Time: 1, MemoryKiB: 64, Threads: 1})
-	a, err := newApp(cfg, testLogger(), database, store, hasher, webui.Handler())
+	a, err := newApp(cfg, testutil.Logger(t), database, store, hasher, webui.Handler())
 	if err != nil {
 		t.Fatal(err)
 	}
 	return &testApp{App: a, db: database, store: store}
-}
-
-func (a *testApp) count(t *testing.T, query string, args ...any) int {
-	t.Helper()
-	var n int
-	if err := a.db.R.QueryRowContext(t.Context(), query, args...).Scan(&n); err != nil {
-		t.Fatalf("%s: %v", query, err)
-	}
-	return n
-}
-
-func (a *testApp) exec(t *testing.T, query string, args ...any) {
-	t.Helper()
-	if _, err := a.db.W.ExecContext(t.Context(), query, args...); err != nil {
-		t.Fatalf("%s: %v", query, err)
-	}
 }
 
 // apiClient is one browser talking to the app through the whole middleware stack.
@@ -76,22 +60,18 @@ func newClient(t *testing.T, a *testApp) *apiClient {
 
 func (c *apiClient) raw(method, path, contentType, body string, extra map[string]string) *httptest.ResponseRecorder {
 	c.t.Helper()
-	r := httptest.NewRequest(method, path, strings.NewReader(body))
-	r.RemoteAddr = "192.0.2.10:4000"
-	if contentType != "" {
-		r.Header.Set("Content-Type", contentType)
-	}
-	for k, v := range c.headers {
-		r.Header.Set(k, v)
-	}
-	for k, v := range extra {
-		r.Header.Set(k, v)
-	}
-	if c.cookie != "" {
-		r.AddCookie(&http.Cookie{Name: auth.CookieName, Value: c.cookie})
-	}
-	rec := httptest.NewRecorder()
-	c.a.Handler().ServeHTTP(rec, r)
+	rec := testutil.DoRaw(c.t, c.a.Handler(), method, path, contentType, body, func(r *http.Request) {
+		r.RemoteAddr = "192.0.2.10:4000"
+		for k, v := range c.headers {
+			r.Header.Set(k, v)
+		}
+		for k, v := range extra {
+			r.Header.Set(k, v)
+		}
+		if c.cookie != "" {
+			r.AddCookie(&http.Cookie{Name: auth.CookieName, Value: c.cookie})
+		}
+	})
 	for _, ck := range rec.Result().Cookies() {
 		if ck.Name == auth.CookieName {
 			if ck.MaxAge < 0 || ck.Value == "" {
@@ -151,45 +131,6 @@ func (c *apiClient) mustLogin(username, pw string) {
 	}
 }
 
-func decodeBody(t *testing.T, rec *httptest.ResponseRecorder, v any) {
-	t.Helper()
-	if err := json.Unmarshal(rec.Body.Bytes(), v); err != nil {
-		t.Fatalf("body %q: %v", rec.Body.String(), err)
-	}
-}
-
-type errBody struct {
-	Error struct {
-		Code    string            `json:"code"`
-		Message string            `json:"message"`
-		Fields  map[string]string `json:"fields"`
-	} `json:"error"`
-}
-
-func errOf(t *testing.T, rec *httptest.ResponseRecorder) errBody {
-	t.Helper()
-	var b errBody
-	_ = json.Unmarshal(rec.Body.Bytes(), &b)
-	return b
-}
-
-// expect fails the test unless the response has the given status and error code.
-func expect(t *testing.T, rec *httptest.ResponseRecorder, status int, code string) errBody {
-	t.Helper()
-	b := errOf(t, rec)
-	if rec.Code != status || b.Error.Code != code {
-		t.Fatalf("status=%d code=%q, want %d %q; body=%s", rec.Code, b.Error.Code, status, code, rec.Body)
-	}
-	return b
-}
-
-func expectStatus(t *testing.T, rec *httptest.ResponseRecorder, status int) {
-	t.Helper()
-	if rec.Code != status {
-		t.Fatalf("status=%d, want %d; body=%s", rec.Code, status, rec.Body)
-	}
-}
-
 // totpCode is the authenticator code for secret right now.
 func totpCode(t *testing.T, secret string) string {
 	t.Helper()
@@ -204,11 +145,11 @@ func totpCode(t *testing.T, secret string) string {
 func (c *apiClient) enableTOTP() string {
 	c.t.Helper()
 	rec := c.do(http.MethodPost, "/api/v1/me/totp/enroll", nil)
-	expectStatus(c.t, rec, http.StatusOK)
+	testutil.ExpectStatus(c.t, rec, http.StatusOK)
 	var e struct {
 		Secret string `json:"secret"`
 	}
-	decodeBody(c.t, rec, &e)
-	expectStatus(c.t, c.do(http.MethodPost, "/api/v1/me/totp/confirm", map[string]string{"code": totpCode(c.t, e.Secret)}), http.StatusOK)
+	testutil.DecodeInto(c.t, rec, &e)
+	testutil.ExpectStatus(c.t, c.do(http.MethodPost, "/api/v1/me/totp/confirm", map[string]string{"code": totpCode(c.t, e.Secret)}), http.StatusOK)
 	return e.Secret
 }

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/reefshepherd/reefshepherd/internal/config"
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 )
 
 type who struct {
@@ -36,7 +37,7 @@ func TestDisabledModeActsAsTheConfiguredUser(t *testing.T) {
 	if r.sessionCookie() != nil {
 		t.Error("disabled mode set a cookie")
 	}
-	if e.count(`SELECT COUNT(*) FROM sessions`) != 0 {
+	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM sessions`) != 0 {
 		t.Error("disabled mode created sessions")
 	}
 	// Any session cookie is ignored in this mode.
@@ -53,7 +54,7 @@ func TestDisabledModeFallsBackToTheFirstEnabledAdmin(t *testing.T) {
 	member := e.addUser("member", goodPassword, "member")
 	off := e.addUser("off", goodPassword, "admin")
 	want := e.addUser("real", goodPassword, "admin")
-	e.exec(`UPDATE users SET disabled = 1 WHERE id = ?`, off)
+	testutil.Exec(e.t, e.db, `UPDATE users SET disabled = 1 WHERE id = ?`, off)
 	if err := e.store.SetAuthMode(t.Context(), config.AuthModeDisabled); err != nil {
 		t.Fatal(err)
 	}

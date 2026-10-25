@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 	"github.com/reefshepherd/reefshepherd/internal/units"
 )
 
@@ -106,7 +107,7 @@ func TestCreateParameterFieldValidation(t *testing.T) {
 			e.invalid(http.MethodPost, "/api/v1/parameters", tc.body, tc.fields...)
 		})
 	}
-	if n := e.count(`SELECT COUNT(*) FROM parameter_definitions`); n != 10 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM parameter_definitions`); n != 10 {
 		t.Errorf("%d definitions after rejected requests, want the 10 presets", n)
 	}
 	e.customParameter(map[string]any{"name": "Taken"})
@@ -205,7 +206,7 @@ func TestArchiveHidesAParameterWithoutLosingItsResults(t *testing.T) {
 			t.Error("archived parameter is still offered for the tank")
 		}
 	}
-	if n := e.count(`SELECT COUNT(*) FROM test_results WHERE parameter_id = ?`, id); n != 1 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM test_results WHERE parameter_id = ?`, id); n != 1 {
 		t.Errorf("%d results kept, want 1", n)
 	}
 	// History stays readable and the series still works.
@@ -243,15 +244,15 @@ func TestDeleteOnlyWithoutResults(t *testing.T) {
 
 	e.fail(http.StatusConflict, "conflict", http.MethodDelete, paramPath(used, ""), nil)
 	e.fail(http.StatusConflict, "conflict", http.MethodDelete, paramPath(e.preset("ph"), ""), nil)
-	if n := e.count(`SELECT COUNT(*) FROM parameter_definitions`); n != 12 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM parameter_definitions`); n != 12 {
 		t.Fatalf("%d definitions after refused deletes, want 12", n)
 	}
 
 	e.must(http.StatusNoContent, http.MethodDelete, paramPath(unused, ""), nil)
-	if n := e.count(`SELECT COUNT(*) FROM parameter_definitions WHERE id = ?`, unused); n != 0 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM parameter_definitions WHERE id = ?`, unused); n != 0 {
 		t.Error("the unused parameter is still there")
 	}
-	if n := e.count(`SELECT COUNT(*) FROM tank_parameters WHERE parameter_id = ?`, unused); n != 0 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM tank_parameters WHERE parameter_id = ?`, unused); n != 0 {
 		t.Error("the tank's settings for the deleted parameter are still there")
 	}
 	e.fail(http.StatusNotFound, "not_found", http.MethodDelete, paramPath(unused, ""), nil)

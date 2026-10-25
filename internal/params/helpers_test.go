@@ -1,17 +1,12 @@
 package params
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
-	"log/slog"
 	"math"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +14,7 @@ import (
 	"github.com/reefshepherd/reefshepherd/internal/db/dbgen"
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
 	"github.com/reefshepherd/reefshepherd/internal/settings"
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 	"github.com/reefshepherd/reefshepherd/internal/units"
 )
 
@@ -28,7 +24,6 @@ type env struct {
 	db     *db.DB
 	store  *settings.Store
 	svc    *Service
-	h      http.Handler
 	bare   http.Handler
 	now    time.Time
 	userID int64
@@ -36,61 +31,21 @@ type env struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	database, err := db.Open(filepath.Join(t.TempDir(), "reef.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
-	if err := database.Migrate(t.Context(), filepath.Join(t.TempDir(), "backups")); err != nil {
-		t.Fatal(err)
-	}
+	database := testutil.OpenDB(t)
 	e := &env{t: t, db: database, store: settings.NewStore(database), now: time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)}
-	e.svc = NewService(Deps{DB: database, Settings: e.store, Logger: slog.New(slog.DiscardHandler)})
+	e.svc = NewService(Deps{DB: database, Settings: e.store, Logger: testutil.Logger(t)})
 	e.svc.now = func() time.Time { return e.now }
-	e.userID = e.insertID(`INSERT INTO users (username, role) VALUES ('tester', 'admin')`)
+	e.userID = testutil.Insert(t, database, `INSERT INTO users (username, role) VALUES ('tester', 'admin')`)
 
 	mux := http.NewServeMux()
 	e.svc.register(mux)
 	e.bare = mux
-	e.h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := httpx.WithUser(r.Context(), httpx.User{ID: e.userID, Username: "tester", Role: httpx.RoleAdmin})
-		mux.ServeHTTP(w, r.WithContext(ctx))
-	})
 	return e
-}
-
-func (e *env) insertID(query string, args ...any) int64 {
-	e.t.Helper()
-	res, err := e.db.W.ExecContext(e.t.Context(), query, args...)
-	if err != nil {
-		e.t.Fatalf("%s: %v", query, err)
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	return id
-}
-
-func (e *env) exec(query string, args ...any) {
-	e.t.Helper()
-	if _, err := e.db.W.ExecContext(e.t.Context(), query, args...); err != nil {
-		e.t.Fatalf("%s: %v", query, err)
-	}
-}
-
-func (e *env) count(query string, args ...any) int {
-	e.t.Helper()
-	var n int
-	if err := e.db.R.QueryRowContext(e.t.Context(), query, args...).Scan(&n); err != nil {
-		e.t.Fatalf("%s: %v", query, err)
-	}
-	return n
 }
 
 func (e *env) addTank(name string) int64 {
 	e.t.Helper()
-	return e.insertID(`INSERT INTO tanks (name) VALUES (?)`, name)
+	return testutil.Insert(e.t, e.db, `INSERT INTO tanks (name) VALUES (?)`, name)
 }
 
 func (e *env) preset(key string) int64 {
@@ -144,36 +99,22 @@ type resp struct {
 	t *testing.T
 }
 
+// do sends a request signed in as the admin test user.
 func (e *env) do(method, path string, body any) *resp {
 	e.t.Helper()
-	return e.doOn(e.h, method, path, body)
+	return e.doOn(e.bare, method, path, body, testutil.AsUser(e.userID, httpx.RoleAdmin))
 }
 
-func (e *env) doOn(h http.Handler, method, path string, body any) *resp {
+// doOn serves a request on h, which is anonymous unless opts sign it in.
+func (e *env) doOn(h http.Handler, method, path string, body any, opts ...testutil.ReqOpt) *resp {
 	e.t.Helper()
-	var buf bytes.Buffer
-	if body != nil {
-		if err := json.NewEncoder(&buf).Encode(body); err != nil {
-			e.t.Fatal(err)
-		}
-	}
-	req := httptest.NewRequest(method, path, &buf)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	return &resp{ResponseRecorder: rec, t: e.t}
+	return &resp{ResponseRecorder: testutil.DoJSON(e.t, h, method, path, body, opts...), t: e.t}
 }
 
 // doRaw sends a request with an unparsed body and the given content type.
 func (e *env) doRaw(method, path, contentType, body string) *resp {
 	e.t.Helper()
-	req := httptest.NewRequest(method, path, strings.NewReader(body))
-	req.Header.Set("Content-Type", contentType)
-	rec := httptest.NewRecorder()
-	e.h.ServeHTTP(rec, req)
-	return &resp{ResponseRecorder: rec, t: e.t}
+	return &resp{ResponseRecorder: testutil.DoRaw(e.t, e.bare, method, path, contentType, body, testutil.AsUser(e.userID, httpx.RoleAdmin)), t: e.t}
 }
 
 // must sends a request and fails unless the status matches.
@@ -188,44 +129,19 @@ func (e *env) must(status int, method, path string, body any) *resp {
 
 func (r *resp) decode(v any) {
 	r.t.Helper()
-	if err := json.Unmarshal(r.Body.Bytes(), v); err != nil {
-		r.t.Fatalf("body %q: %v", r.Body.String(), err)
-	}
+	testutil.DecodeInto(r.t, r.ResponseRecorder, v)
 }
 
-type errBody struct {
-	Error struct {
-		Code    string            `json:"code"`
-		Message string            `json:"message"`
-		Fields  map[string]string `json:"fields"`
-	} `json:"error"`
-}
-
-// fail expects the given status and error code and returns the error body.
-func (e *env) fail(status int, code, method, path string, body any) errBody {
+// fail sends a request and expects the given status and error code.
+func (e *env) fail(status int, code, method, path string, body any) testutil.ErrorBody {
 	e.t.Helper()
-	r := e.do(method, path, body)
-	var b errBody
-	_ = json.Unmarshal(r.Body.Bytes(), &b)
-	if r.Code != status || b.Error.Code != code {
-		e.t.Fatalf("%s %s: status=%d code=%q, want %d %q; body=%s", method, path, r.Code, b.Error.Code, status, code, r.Body)
-	}
-	return b
+	return testutil.ExpectError(e.t, e.do(method, path, body).ResponseRecorder, status, code)
 }
 
 // invalid expects a 422 validation error naming exactly the given fields.
-func (e *env) invalid(method, path string, body any, fields ...string) errBody {
+func (e *env) invalid(method, path string, body any, fields ...string) testutil.ErrorBody {
 	e.t.Helper()
-	b := e.fail(http.StatusUnprocessableEntity, "validation", method, path, body)
-	if len(b.Error.Fields) != len(fields) {
-		e.t.Fatalf("%s %s: fields=%v, want exactly %v", method, path, b.Error.Fields, fields)
-	}
-	for _, f := range fields {
-		if b.Error.Fields[f] == "" {
-			e.t.Fatalf("%s %s: no message for field %q in %v", method, path, f, b.Error.Fields)
-		}
-	}
-	return b
+	return testutil.ExpectError(e.t, e.do(method, path, body).ResponseRecorder, http.StatusUnprocessableEntity, "validation", fields...)
 }
 
 type entry struct {

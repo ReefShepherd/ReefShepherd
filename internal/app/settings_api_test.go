@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/reefshepherd/reefshepherd/internal/config"
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 )
 
 type settingsBody struct {
@@ -19,9 +20,9 @@ type settingsBody struct {
 func getSettings(t *testing.T, c *apiClient) settingsBody {
 	t.Helper()
 	rec := c.do(http.MethodGet, "/api/v1/settings", nil)
-	expectStatus(t, rec, http.StatusOK)
+	testutil.ExpectStatus(t, rec, http.StatusOK)
 	var s settingsBody
-	decodeBody(t, rec, &s)
+	testutil.DecodeInto(t, rec, &s)
 	return s
 }
 
@@ -44,8 +45,8 @@ func TestSettingsDefaultsAndUpdate(t *testing.T) {
 		"instance_name": "Garage Reef", "timezone": "America/New_York", "reminder_default_time": "07:30",
 		"units": map[string]string{"alkalinity": "meq_l", "salinity": "ppt"},
 	})
-	expectStatus(t, rec, http.StatusOK)
-	decodeBody(t, rec, &s)
+	testutil.ExpectStatus(t, rec, http.StatusOK)
+	testutil.DecodeInto(t, rec, &s)
 	if s.InstanceName != "Garage Reef" || s.Timezone != "America/New_York" || s.ReminderDefaultTime != "07:30" || s.Units["alkalinity"] != "meq_l" || s.Units["salinity"] != "ppt" {
 		t.Errorf("patched = %+v", s)
 	}
@@ -55,12 +56,12 @@ func TestSettingsDefaultsAndUpdate(t *testing.T) {
 		t.Errorf("again = %+v", again)
 	}
 	// An empty patch is fine and changes nothing.
-	expectStatus(t, c.do(http.MethodPatch, "/api/v1/settings", map[string]any{}), http.StatusOK)
+	testutil.ExpectStatus(t, c.do(http.MethodPatch, "/api/v1/settings", map[string]any{}), http.StatusOK)
 }
 
 func TestSettingsPatchIsAllOrNothing(t *testing.T) {
 	a, c := adminAndApp(t)
-	b := expect(t, c.do(http.MethodPatch, "/api/v1/settings", map[string]any{
+	b := testutil.ExpectError(t, c.do(http.MethodPatch, "/api/v1/settings", map[string]any{
 		"instance_name": "Valid Name", "timezone": "Mars/Base", "reminder_default_time": "25:00",
 		"units": map[string]string{"temperature": "kelvin", "nonsense": "x", "volume": "us_gal"},
 	}), http.StatusUnprocessableEntity, "validation")
@@ -76,8 +77,8 @@ func TestSettingsPatchIsAllOrNothing(t *testing.T) {
 	if s.InstanceName == "Valid Name" || s.Units["volume"] == "us_gal" {
 		t.Errorf("a rejected patch was partly applied: %+v", s)
 	}
-	expect(t, c.do(http.MethodPatch, "/api/v1/settings", map[string]any{"instance_name": "  "}), http.StatusUnprocessableEntity, "validation")
-	expect(t, c.do(http.MethodPatch, "/api/v1/settings", map[string]any{"mystery": true}), http.StatusUnprocessableEntity, "validation")
+	testutil.ExpectError(t, c.do(http.MethodPatch, "/api/v1/settings", map[string]any{"instance_name": "  "}), http.StatusUnprocessableEntity, "validation")
+	testutil.ExpectError(t, c.do(http.MethodPatch, "/api/v1/settings", map[string]any{"mystery": true}), http.StatusUnprocessableEntity, "validation")
 	_ = a
 }
 
@@ -86,7 +87,7 @@ func TestUnitsCatalog(t *testing.T) {
 	addUser(t, admin, "mia", "member")
 	for _, c := range []*apiClient{admin, signedInAs(t, a, "mia")} {
 		rec := c.do(http.MethodGet, "/api/v1/units", nil)
-		expectStatus(t, rec, http.StatusOK)
+		testutil.ExpectStatus(t, rec, http.StatusOK)
 		var catalog []struct {
 			Family    string `json:"family"`
 			Canonical string `json:"canonical"`
@@ -95,13 +96,13 @@ func TestUnitsCatalog(t *testing.T) {
 				Label string `json:"label"`
 			} `json:"units"`
 		}
-		decodeBody(t, rec, &catalog)
+		testutil.DecodeInto(t, rec, &catalog)
 		if len(catalog) < 5 || catalog[0].Family != "temperature" || catalog[0].Canonical != "c" || len(catalog[0].Units) != 2 || catalog[0].Units[1].Label != "°F" {
 			t.Errorf("catalog = %+v", catalog)
 		}
 	}
 	anon := newClient(t, a).do(http.MethodGet, "/api/v1/units", nil)
-	expectStatus(t, anon, http.StatusOK)
+	testutil.ExpectStatus(t, anon, http.StatusOK)
 	if got := anon.Header().Get("Cache-Control"); got != "no-store" {
 		t.Errorf("anonymous catalog Cache-Control = %q", got)
 	}
@@ -111,26 +112,26 @@ func TestTurningLoginOffNeedsTheAdminPassword(t *testing.T) {
 	a, c := adminAndApp(t)
 	off := map[string]any{"auth_mode": "disabled"}
 
-	b := expect(t, c.do(http.MethodPatch, "/api/v1/settings", off), http.StatusUnprocessableEntity, "validation")
+	b := testutil.ExpectError(t, c.do(http.MethodPatch, "/api/v1/settings", off), http.StatusUnprocessableEntity, "validation")
 	if b.Error.Fields["password"] == "" {
 		t.Errorf("fields = %v", b.Error.Fields)
 	}
-	expect(t, c.doWith(http.MethodPatch, "/api/v1/settings", map[string]any{"auth_mode": "disabled", "password": "the wrong one!!"}, nil), http.StatusUnprocessableEntity, "validation")
+	testutil.ExpectError(t, c.doWith(http.MethodPatch, "/api/v1/settings", map[string]any{"auth_mode": "disabled", "password": "the wrong one!!"}, nil), http.StatusUnprocessableEntity, "validation")
 	if mode, _ := a.store.GetAuthMode(t.Context()); mode != "password" {
 		t.Fatalf("mode changed to %q without the right password", mode)
 	}
 	// Anonymous callers are still locked out.
-	expect(t, newClient(t, a).do(http.MethodGet, "/api/v1/me", nil), http.StatusUnauthorized, "unauthorized")
+	testutil.ExpectError(t, newClient(t, a).do(http.MethodGet, "/api/v1/me", nil), http.StatusUnauthorized, "unauthorized")
 
 	rec := c.do(http.MethodPatch, "/api/v1/settings", map[string]any{"auth_mode": "disabled", "password": adminPassword})
-	expectStatus(t, rec, http.StatusOK)
+	testutil.ExpectStatus(t, rec, http.StatusOK)
 	var s settingsBody
-	decodeBody(t, rec, &s)
+	testutil.DecodeInto(t, rec, &s)
 	if s.AuthMode != "disabled" {
 		t.Errorf("auth_mode = %q", s.AuthMode)
 	}
 	var me meBody
-	decodeBody(t, newClient(t, a).do(http.MethodGet, "/api/v1/me", nil), &me)
+	testutil.DecodeInto(t, newClient(t, a).do(http.MethodGet, "/api/v1/me", nil), &me)
 	if me.Username != adminName {
 		t.Errorf("anonymous acts as %q", me.Username)
 	}
@@ -142,10 +143,10 @@ func TestTurningLoginOffNeedsTheAdminPassword(t *testing.T) {
 func TestWrongPasswordWhenTurningLoginOffIsRateLimited(t *testing.T) {
 	_, c := adminAndApp(t)
 	for range 5 {
-		expect(t, c.do(http.MethodPatch, "/api/v1/settings", map[string]any{"auth_mode": "disabled", "password": "the wrong one!!"}), http.StatusUnprocessableEntity, "validation")
+		testutil.ExpectError(t, c.do(http.MethodPatch, "/api/v1/settings", map[string]any{"auth_mode": "disabled", "password": "the wrong one!!"}), http.StatusUnprocessableEntity, "validation")
 	}
 	rec := c.do(http.MethodPatch, "/api/v1/settings", map[string]any{"auth_mode": "disabled", "password": adminPassword})
-	expect(t, rec, http.StatusTooManyRequests, "too_many_requests")
+	testutil.ExpectError(t, rec, http.StatusTooManyRequests, "too_many_requests")
 	if rec.Header().Get("Retry-After") == "" {
 		t.Error("no Retry-After header")
 	}
@@ -157,7 +158,7 @@ func TestAdminWithoutAPasswordCannotTurnLoginOffOrOn(t *testing.T) {
 	c.do(http.MethodPost, "/api/v1/setup", map[string]any{"auth_mode": "disabled"})
 
 	// Login is already off; with nobody holding a password it cannot be switched on.
-	b := expect(t, c.do(http.MethodPatch, "/api/v1/settings", map[string]any{"auth_mode": "password"}), http.StatusUnprocessableEntity, "validation")
+	b := testutil.ExpectError(t, c.do(http.MethodPatch, "/api/v1/settings", map[string]any{"auth_mode": "password"}), http.StatusUnprocessableEntity, "validation")
 	if b.Error.Fields["auth_mode"] == "" {
 		t.Errorf("fields = %v", b.Error.Fields)
 	}
@@ -166,12 +167,12 @@ func TestAdminWithoutAPasswordCannotTurnLoginOffOrOn(t *testing.T) {
 	}
 
 	// Setting a password first makes it possible.
-	expectStatus(t, c.do(http.MethodPost, "/api/v1/me/password", map[string]string{"new_password": adminPassword}), http.StatusNoContent)
-	expectStatus(t, c.do(http.MethodPatch, "/api/v1/settings", map[string]any{"auth_mode": "password"}), http.StatusOK)
+	testutil.ExpectStatus(t, c.do(http.MethodPost, "/api/v1/me/password", map[string]string{"new_password": adminPassword}), http.StatusNoContent)
+	testutil.ExpectStatus(t, c.do(http.MethodPatch, "/api/v1/settings", map[string]any{"auth_mode": "password"}), http.StatusOK)
 	if id, _ := a.store.GetAuthDisabledUserID(t.Context()); id != 0 {
 		t.Errorf("the disabled-mode user %d was not cleared", id)
 	}
-	expect(t, newClient(t, a).do(http.MethodGet, "/api/v1/me", nil), http.StatusUnauthorized, "unauthorized")
+	testutil.ExpectError(t, newClient(t, a).do(http.MethodGet, "/api/v1/me", nil), http.StatusUnauthorized, "unauthorized")
 	newClient(t, a).mustLogin("admin", adminPassword)
 }
 
@@ -184,7 +185,7 @@ func TestEnvironmentOverrideLocksTheLoginMode(t *testing.T) {
 	if s.AuthMode != "password" || s.EnvLocked["auth_mode"] != "REEFSHEPHERD_AUTH_MODE" {
 		t.Errorf("settings = %+v", s)
 	}
-	b := expect(t, c.do(http.MethodPatch, "/api/v1/settings", map[string]any{"auth_mode": "disabled", "password": adminPassword}), http.StatusConflict, "env_locked")
+	b := testutil.ExpectError(t, c.do(http.MethodPatch, "/api/v1/settings", map[string]any{"auth_mode": "disabled", "password": adminPassword}), http.StatusConflict, "env_locked")
 	if b.Error.Fields["auth_mode"] == "" {
 		t.Errorf("fields = %v", b.Error.Fields)
 	}
@@ -192,7 +193,7 @@ func TestEnvironmentOverrideLocksTheLoginMode(t *testing.T) {
 		t.Error("the locked mode was changed")
 	}
 	// Asking for the value already in force, or changing other settings, is fine.
-	expectStatus(t, c.do(http.MethodPatch, "/api/v1/settings", map[string]any{"auth_mode": "password", "instance_name": "Locked But Named"}), http.StatusOK)
+	testutil.ExpectStatus(t, c.do(http.MethodPatch, "/api/v1/settings", map[string]any{"auth_mode": "password", "instance_name": "Locked But Named"}), http.StatusOK)
 	if s := getSettings(t, c); s.InstanceName != "Locked But Named" {
 		t.Errorf("instance name = %q", s.InstanceName)
 	}
@@ -207,10 +208,10 @@ func TestEnvironmentOverrideWinsOverTheStoredMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	anon := newClient(t, a)
-	expectStatus(t, anon.do(http.MethodGet, "/api/v1/me", nil), http.StatusOK)
+	testutil.ExpectStatus(t, anon.do(http.MethodGet, "/api/v1/me", nil), http.StatusOK)
 	s := getSettings(t, anon)
 	if s.AuthMode != "disabled" || s.EnvLocked["auth_mode"] == "" {
 		t.Errorf("settings = %+v", s)
 	}
-	expect(t, anon.login(adminName, adminPassword), http.StatusConflict, "conflict")
+	testutil.ExpectError(t, anon.login(adminName, adminPassword), http.StatusConflict, "conflict")
 }

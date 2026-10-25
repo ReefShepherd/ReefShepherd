@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/reefshepherd/reefshepherd/internal/httpx"
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 )
 
 func TestSeriesReturnsPointsOldestFirstWithRangeAndUnit(t *testing.T) {
@@ -166,16 +166,14 @@ func TestRoutesRegistersTheEndpointsOnAMux(t *testing.T) {
 	mux := http.NewServeMux()
 	var hooked []Result
 	Routes(mux, Deps{DB: e.db, Settings: e.store, OnResultCreated: func(_ context.Context, r Result) { hooked = append(hooked, r) }})
-	signedIn := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mux.ServeHTTP(w, r.WithContext(httpx.WithUser(r.Context(), httpx.User{ID: e.userID})))
-	})
+	signedIn := testutil.AsUser(e.userID, "")
 	tank, ph := e.addTank("Routes"), e.preset("ph")
 
-	r := e.doOn(signedIn, http.MethodGet, "/api/v1/parameters", nil)
+	r := e.doOn(mux, http.MethodGet, "/api/v1/parameters", nil, signedIn)
 	if r.Code != http.StatusOK {
 		t.Fatalf("GET parameters: %d %s", r.Code, r.Body)
 	}
-	r = e.doOn(signedIn, http.MethodPost, tankPath(tank, "/results"), map[string]any{"results": []entry{val(ph, 8)}})
+	r = e.doOn(mux, http.MethodPost, tankPath(tank, "/results"), map[string]any{"results": []entry{val(ph, 8)}}, signedIn)
 	if r.Code != http.StatusCreated || len(hooked) != 1 {
 		t.Fatalf("POST results: %d %s, hook calls %d", r.Code, r.Body, len(hooked))
 	}

@@ -2,23 +2,16 @@ package settings
 
 import (
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"github.com/reefshepherd/reefshepherd/internal/db"
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 	"github.com/reefshepherd/reefshepherd/internal/units"
 )
 
 func newStore(t *testing.T) (*Store, *db.DB) {
 	t.Helper()
-	d, err := db.Open(filepath.Join(t.TempDir(), "reef.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = d.Close() })
-	if err := d.Migrate(t.Context(), filepath.Join(t.TempDir(), "backups")); err != nil {
-		t.Fatal(err)
-	}
+	d := testutil.OpenDB(t)
 	return NewStore(d), d
 }
 
@@ -63,7 +56,7 @@ func TestDefaultsWhenNothingIsStored(t *testing.T) {
 			t.Errorf("unit for %s = %q, %v; want %q", family, got, err, want)
 		}
 	}
-	if n := rowCount(t, d); n != 0 {
+	if n := testutil.Count(t, d, `SELECT COUNT(*) FROM settings`); n != 0 {
 		t.Errorf("reading defaults wrote %d rows", n)
 	}
 }
@@ -84,15 +77,6 @@ func TestSalinityDefaultsToSGAndPPTCanBeChosen(t *testing.T) {
 	if got, err := s.GetUnit(ctx, units.Salinity); err != nil || got != units.PPT {
 		t.Errorf("chosen salinity unit = %q, %v; want %q", got, err, units.PPT)
 	}
-}
-
-func rowCount(t *testing.T, d *db.DB) int {
-	t.Helper()
-	var n int
-	if err := d.R.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM settings`).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	return n
 }
 
 func TestSettersRoundTrip(t *testing.T) {
@@ -190,7 +174,7 @@ func TestSettersRejectInvalidValues(t *testing.T) {
 	if _, err := s.GetUnit(ctx, units.Fixed); !errors.Is(err, ErrInvalid) {
 		t.Errorf("GetUnit(fixed) err = %v, want ErrInvalid", err)
 	}
-	if n := rowCount(t, d); n != 0 {
+	if n := testutil.Count(t, d, `SELECT COUNT(*) FROM settings`); n != 0 {
 		t.Errorf("rejected values left %d rows behind", n)
 	}
 }

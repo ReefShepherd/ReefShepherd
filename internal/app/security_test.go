@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/reefshepherd/reefshepherd/internal/config"
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 )
 
 var (
@@ -53,16 +54,16 @@ func TestCrossSiteRequestsCannotChangeStateWithAValidSession(t *testing.T) {
 			} else {
 				rec = c.doWith(tc.method, tc.path, tc.body, crossSite)
 			}
-			expect(t, rec, http.StatusForbidden, "forbidden")
+			testutil.ExpectError(t, rec, http.StatusForbidden, "forbidden")
 		})
 	}
 
 	// Nothing happened: same session, same password, same data.
-	expectStatus(t, c.do(http.MethodGet, "/api/v1/me", nil), http.StatusOK)
+	testutil.ExpectStatus(t, c.do(http.MethodGet, "/api/v1/me", nil), http.StatusOK)
 	if !passwordStillWorks(a) {
 		t.Error("a cross-site request changed the password")
 	}
-	if a.count(t, `SELECT COUNT(*) FROM users`) != 2 || a.count(t, `SELECT COUNT(*) FROM users WHERE role = 'admin'`) != 1 {
+	if testutil.Count(t, a.db, `SELECT COUNT(*) FROM users`) != 2 || testutil.Count(t, a.db, `SELECT COUNT(*) FROM users WHERE role = 'admin'`) != 1 {
 		t.Error("a cross-site request changed the users")
 	}
 	if name, _ := a.store.GetInstanceName(t.Context()); name == "Hijacked" {
@@ -77,29 +78,29 @@ func TestCrossSiteLoginAndSetupAreRefusedToo(t *testing.T) {
 	a := newAPITestApp(t, config.Config{})
 	c := newClient(t, a)
 	// Setup from another site must not let a malicious page create the first admin for the victim's server.
-	expect(t, c.doWith(http.MethodPost, "/api/v1/setup", map[string]any{"username": "evil", "password": otherPassword}, crossSite), http.StatusForbidden, "forbidden")
-	if a.count(t, `SELECT COUNT(*) FROM users`) != 0 {
+	testutil.ExpectError(t, c.doWith(http.MethodPost, "/api/v1/setup", map[string]any{"username": "evil", "password": otherPassword}, crossSite), http.StatusForbidden, "forbidden")
+	if testutil.Count(t, a.db, `SELECT COUNT(*) FROM users`) != 0 {
 		t.Fatal("cross-site setup created a user")
 	}
 	c.setup(nil)
 
 	// Login CSRF: a page that logs the victim into the attacker's account.
 	rec := c.doWith(http.MethodPost, "/api/v1/auth/login", map[string]string{"username": adminName, "password": adminPassword}, crossSite)
-	expect(t, rec, http.StatusForbidden, "forbidden")
+	testutil.ExpectError(t, rec, http.StatusForbidden, "forbidden")
 	if len(rec.Result().Cookies()) != 0 {
 		t.Error("a refused cross-site login set a cookie")
 	}
-	expect(t, c.doWith(http.MethodPost, "/api/v1/auth/mfa", map[string]string{"code": "123456"}, crossSite), http.StatusForbidden, "forbidden")
+	testutil.ExpectError(t, c.doWith(http.MethodPost, "/api/v1/auth/mfa", map[string]string{"code": "123456"}, crossSite), http.StatusForbidden, "forbidden")
 
 	// A browser says same-site for sibling subdomains: that is still not same-origin.
 	sibling := map[string]string{"Sec-Fetch-Site": "same-site", "Origin": "https://other.example.org"}
-	expect(t, c.doWith(http.MethodPost, "/api/v1/auth/login", map[string]string{"username": adminName, "password": adminPassword}, sibling), http.StatusForbidden, "forbidden")
+	testutil.ExpectError(t, c.doWith(http.MethodPost, "/api/v1/auth/login", map[string]string{"username": adminName, "password": adminPassword}, sibling), http.StatusForbidden, "forbidden")
 }
 
 func TestOriginHeaderAloneIsEnoughToRefuseAForeignSite(t *testing.T) {
 	a, c := adminAndApp(t)
 	old := map[string]string{"Origin": "https://evil.example"} // an older browser without Sec-Fetch-Site
-	expect(t, c.doWith(http.MethodPost, "/api/v1/me/password", map[string]string{"current_password": adminPassword, "new_password": "hijacked passphrase"}, old), http.StatusForbidden, "forbidden")
+	testutil.ExpectError(t, c.doWith(http.MethodPost, "/api/v1/me/password", map[string]string{"current_password": adminPassword, "new_password": "hijacked passphrase"}, old), http.StatusForbidden, "forbidden")
 	if !passwordStillWorks(a) {
 		t.Error("the password changed")
 	}
@@ -109,16 +110,16 @@ func TestSameOriginAndNonBrowserRequestsAreAccepted(t *testing.T) {
 	a, c := adminAndApp(t)
 	// Same origin, as the web UI sends it.
 	rec := c.doWith(http.MethodPatch, "/api/v1/me", map[string]string{"display_name": "Same"}, sameOrigin)
-	expectStatus(t, rec, http.StatusOK)
+	testutil.ExpectStatus(t, rec, http.StatusOK)
 	// No browser headers at all: curl, the CLI, scripts.
-	expectStatus(t, c.do(http.MethodPatch, "/api/v1/me", map[string]string{"display_name": "Script"}), http.StatusOK)
+	testutil.ExpectStatus(t, c.do(http.MethodPatch, "/api/v1/me", map[string]string{"display_name": "Script"}), http.StatusOK)
 	// The Origin header naming the app's own host.
 	own := map[string]string{"Origin": "http://example.com"}
 	rec = c.raw(http.MethodPatch, "/api/v1/me", "application/json", `{"display_name":"Own"}`, own)
-	expectStatus(t, rec, http.StatusOK)
+	testutil.ExpectStatus(t, rec, http.StatusOK)
 	// Reads are never blocked by the origin check; they change nothing.
 	rec = c.raw(http.MethodGet, "/api/v1/me", "", "", crossSite)
-	expectStatus(t, rec, http.StatusOK)
+	testutil.ExpectStatus(t, rec, http.StatusOK)
 	_ = a
 }
 
@@ -127,8 +128,8 @@ func TestTrustedOriginMayMakeCrossOriginRequests(t *testing.T) {
 	c := newClient(t, a)
 	c.setup(nil)
 	trusted := map[string]string{"Sec-Fetch-Site": "cross-site", "Origin": "https://reef.home.lan"}
-	expectStatus(t, c.doWith(http.MethodPatch, "/api/v1/me", map[string]string{"display_name": "Proxy"}, trusted), http.StatusOK)
-	expect(t, c.doWith(http.MethodPatch, "/api/v1/me", map[string]string{"display_name": "Evil"}, crossSite), http.StatusForbidden, "forbidden")
+	testutil.ExpectStatus(t, c.doWith(http.MethodPatch, "/api/v1/me", map[string]string{"display_name": "Proxy"}, trusted), http.StatusOK)
+	testutil.ExpectError(t, c.doWith(http.MethodPatch, "/api/v1/me", map[string]string{"display_name": "Evil"}, crossSite), http.StatusForbidden, "forbidden")
 }
 
 func TestStateChangingRequestsMustBeJSON(t *testing.T) {
@@ -136,13 +137,13 @@ func TestStateChangingRequestsMustBeJSON(t *testing.T) {
 	form := "current_password=" + adminPassword + "&new_password=hijacked+passphrase"
 	for _, ct := range []string{"application/x-www-form-urlencoded", "text/plain", "text/plain;charset=UTF-8", "multipart/form-data; boundary=x", ""} {
 		rec := c.raw(http.MethodPost, "/api/v1/me/password", ct, form, sameOrigin)
-		expect(t, rec, http.StatusUnsupportedMediaType, "unsupported_media_type")
+		testutil.ExpectError(t, rec, http.StatusUnsupportedMediaType, "unsupported_media_type")
 	}
 	// A JSON body smuggled in as text/plain, which a cross-site form can send without a preflight.
 	rec := c.raw(http.MethodPost, "/api/v1/me/password", "text/plain", `{"current_password":"`+adminPassword+`","new_password":"hijacked passphrase"}`, nil)
-	expect(t, rec, http.StatusUnsupportedMediaType, "unsupported_media_type")
+	testutil.ExpectError(t, rec, http.StatusUnsupportedMediaType, "unsupported_media_type")
 	rec = c.raw(http.MethodPost, "/api/v1/auth/login", "text/plain", `{"username":"`+adminName+`","password":"`+adminPassword+`"}`, nil)
-	expect(t, rec, http.StatusUnsupportedMediaType, "unsupported_media_type")
+	testutil.ExpectError(t, rec, http.StatusUnsupportedMediaType, "unsupported_media_type")
 	if !passwordStillWorks(a) {
 		t.Error("the password changed")
 	}
@@ -204,14 +205,14 @@ func TestLogoutThroughTheStackEndsTheSession(t *testing.T) {
 	a, c := adminAndApp(t)
 	token := c.cookie
 	rec := c.do(http.MethodPost, "/api/v1/auth/logout", nil)
-	expectStatus(t, rec, http.StatusNoContent)
+	testutil.ExpectStatus(t, rec, http.StatusNoContent)
 	if !strings.Contains(rec.Header().Get("Set-Cookie"), "Max-Age=0") && !strings.Contains(rec.Header().Get("Set-Cookie"), "Max-Age=-1") {
 		// net/http writes a negative MaxAge as "Max-Age=0".
 		t.Errorf("Set-Cookie = %q", rec.Header().Get("Set-Cookie"))
 	}
 	replay := newClient(t, a)
 	replay.cookie = token
-	expect(t, replay.do(http.MethodGet, "/api/v1/me", nil), http.StatusUnauthorized, "unauthorized")
+	testutil.ExpectError(t, replay.do(http.MethodGet, "/api/v1/me", nil), http.StatusUnauthorized, "unauthorized")
 }
 
 func TestLoginThroughTheStackFailsGenerically(t *testing.T) {
@@ -219,8 +220,8 @@ func TestLoginThroughTheStackFailsGenerically(t *testing.T) {
 	c := newClient(t, a)
 	wrong := c.login(adminName, "wrong password here")
 	unknown := newClient(t, a).login("ghost", "wrong password here")
-	expect(t, wrong, http.StatusUnauthorized, "invalid_credentials")
-	expect(t, unknown, http.StatusUnauthorized, "invalid_credentials")
+	testutil.ExpectError(t, wrong, http.StatusUnauthorized, "invalid_credentials")
+	testutil.ExpectError(t, unknown, http.StatusUnauthorized, "invalid_credentials")
 	if wrong.Body.String() != unknown.Body.String() {
 		t.Errorf("responses differ: %s vs %s", wrong.Body, unknown.Body)
 	}
@@ -230,34 +231,34 @@ func TestCrossSiteRequestsAreRefusedWhenLoginIsOff(t *testing.T) {
 	// With no login every visitor is the admin, so the origin check is the only thing between a malicious page and the instance.
 	a := newAPITestApp(t, config.Config{})
 	c := newClient(t, a)
-	expectStatus(t, c.do(http.MethodPost, "/api/v1/setup", map[string]any{"auth_mode": "disabled"}), http.StatusCreated)
+	testutil.ExpectStatus(t, c.do(http.MethodPost, "/api/v1/setup", map[string]any{"auth_mode": "disabled"}), http.StatusCreated)
 
-	expect(t, c.doWith(http.MethodPost, "/api/v1/users", map[string]string{"username": "evil", "password": "hijacked passphrase", "role": "admin"}, crossSite), http.StatusForbidden, "forbidden")
-	expect(t, c.doWith(http.MethodPatch, "/api/v1/settings", map[string]string{"instance_name": "Hijacked"}, crossSite), http.StatusForbidden, "forbidden")
-	expect(t, c.doWith(http.MethodPost, "/api/v1/me/password", map[string]string{"new_password": "hijacked passphrase"}, crossSite), http.StatusForbidden, "forbidden")
-	if a.count(t, `SELECT COUNT(*) FROM users`) != 1 || a.count(t, `SELECT COUNT(*) FROM users WHERE password_hash IS NOT NULL`) != 0 {
+	testutil.ExpectError(t, c.doWith(http.MethodPost, "/api/v1/users", map[string]string{"username": "evil", "password": "hijacked passphrase", "role": "admin"}, crossSite), http.StatusForbidden, "forbidden")
+	testutil.ExpectError(t, c.doWith(http.MethodPatch, "/api/v1/settings", map[string]string{"instance_name": "Hijacked"}, crossSite), http.StatusForbidden, "forbidden")
+	testutil.ExpectError(t, c.doWith(http.MethodPost, "/api/v1/me/password", map[string]string{"new_password": "hijacked passphrase"}, crossSite), http.StatusForbidden, "forbidden")
+	if testutil.Count(t, a.db, `SELECT COUNT(*) FROM users`) != 1 || testutil.Count(t, a.db, `SELECT COUNT(*) FROM users WHERE password_hash IS NOT NULL`) != 0 {
 		t.Error("a cross-site request changed accounts while login was off")
 	}
 	// The same calls without cross-site headers go through.
-	expectStatus(t, c.do(http.MethodPost, "/api/v1/users", map[string]string{"username": "mia", "password": otherPassword}), http.StatusCreated)
+	testutil.ExpectStatus(t, c.do(http.MethodPost, "/api/v1/users", map[string]string{"username": "mia", "password": otherPassword}), http.StatusCreated)
 }
 
 func TestDisablingTOTPThroughTheStackNeedsTheCurrentPassword(t *testing.T) {
 	a, c := adminAndApp(t)
 	c.enableTOTP()
 
-	expect(t, c.do(http.MethodDelete, "/api/v1/me/totp", nil), http.StatusUnprocessableEntity, "validation")
-	b := expect(t, c.do(http.MethodDelete, "/api/v1/me/totp", map[string]string{"password": "not the password!!"}), http.StatusUnprocessableEntity, "validation")
+	testutil.ExpectError(t, c.do(http.MethodDelete, "/api/v1/me/totp", nil), http.StatusUnprocessableEntity, "validation")
+	b := testutil.ExpectError(t, c.do(http.MethodDelete, "/api/v1/me/totp", map[string]string{"password": "not the password!!"}), http.StatusUnprocessableEntity, "validation")
 	if b.Error.Fields["password"] == "" {
 		t.Errorf("fields = %v", b.Error.Fields)
 	}
-	if a.count(t, `SELECT COUNT(*) FROM user_totp WHERE confirmed_at IS NOT NULL`) != 1 {
+	if testutil.Count(t, a.db, `SELECT COUNT(*) FROM user_totp WHERE confirmed_at IS NOT NULL`) != 1 {
 		t.Fatal("two-step login was removed without the password")
 	}
 	// A cross-site page cannot do it even if it somehow had the password.
-	expect(t, c.doWith(http.MethodDelete, "/api/v1/me/totp", map[string]string{"password": adminPassword}, crossSite), http.StatusForbidden, "forbidden")
-	expectStatus(t, c.do(http.MethodDelete, "/api/v1/me/totp", map[string]string{"password": adminPassword}), http.StatusNoContent)
-	if a.count(t, `SELECT COUNT(*) FROM user_totp`) != 0 {
+	testutil.ExpectError(t, c.doWith(http.MethodDelete, "/api/v1/me/totp", map[string]string{"password": adminPassword}, crossSite), http.StatusForbidden, "forbidden")
+	testutil.ExpectStatus(t, c.do(http.MethodDelete, "/api/v1/me/totp", map[string]string{"password": adminPassword}), http.StatusNoContent)
+	if testutil.Count(t, a.db, `SELECT COUNT(*) FROM user_totp`) != 0 {
 		t.Error("secret survived")
 	}
 }
@@ -281,21 +282,21 @@ func TestEndpointsWithoutABodyStillRefuseFormAndTextPosts(t *testing.T) {
 		t.Run(ep.name, func(t *testing.T) {
 			c := ep.client()
 			for _, ct := range []string{"application/x-www-form-urlencoded", "text/plain", "text/plain;charset=UTF-8", "multipart/form-data; boundary=x"} {
-				expect(t, c.raw(ep.method, ep.path, ct, "", sameOrigin), http.StatusUnsupportedMediaType, "unsupported_media_type")
-				expect(t, c.raw(ep.method, ep.path, ct, "a=b", sameOrigin), http.StatusUnsupportedMediaType, "unsupported_media_type")
+				testutil.ExpectError(t, c.raw(ep.method, ep.path, ct, "", sameOrigin), http.StatusUnsupportedMediaType, "unsupported_media_type")
+				testutil.ExpectError(t, c.raw(ep.method, ep.path, ct, "a=b", sameOrigin), http.StatusUnsupportedMediaType, "unsupported_media_type")
 			}
-			expect(t, c.raw(ep.method, ep.path, "", "a=b", sameOrigin), http.StatusUnsupportedMediaType, "unsupported_media_type")
+			testutil.ExpectError(t, c.raw(ep.method, ep.path, "", "a=b", sameOrigin), http.StatusUnsupportedMediaType, "unsupported_media_type")
 		})
 	}
 	// Nothing happened to the account or its session.
-	expectStatus(t, mia.do(http.MethodGet, "/api/v1/me", nil), http.StatusOK)
-	if a.count(t, `SELECT COUNT(*) FROM user_totp`) != 0 || a.count(t, `SELECT COUNT(*) FROM users WHERE id = ?`, id) != 1 {
+	testutil.ExpectStatus(t, mia.do(http.MethodGet, "/api/v1/me", nil), http.StatusOK)
+	if testutil.Count(t, a.db, `SELECT COUNT(*) FROM user_totp`) != 0 || testutil.Count(t, a.db, `SELECT COUNT(*) FROM users WHERE id = ?`, id) != 1 {
 		t.Error("a refused request still changed state")
 	}
 
 	// A normal client sends no body and no content type, or a JSON one.
-	expectStatus(t, mia.raw(http.MethodPost, "/api/v1/me/totp/enroll", "", "", nil), http.StatusOK)
-	expectStatus(t, mia.raw(http.MethodDelete, "/api/v1/me/totp", "application/json", `{}`, nil), http.StatusNoContent)
-	expectStatus(t, mia.raw(http.MethodPost, "/api/v1/me/totp/enroll", "application/json", `{}`, nil), http.StatusOK)
-	expectStatus(t, mia.raw(http.MethodPost, "/api/v1/auth/logout", "", "", nil), http.StatusNoContent)
+	testutil.ExpectStatus(t, mia.raw(http.MethodPost, "/api/v1/me/totp/enroll", "", "", nil), http.StatusOK)
+	testutil.ExpectStatus(t, mia.raw(http.MethodDelete, "/api/v1/me/totp", "application/json", `{}`, nil), http.StatusNoContent)
+	testutil.ExpectStatus(t, mia.raw(http.MethodPost, "/api/v1/me/totp/enroll", "application/json", `{}`, nil), http.StatusOK)
+	testutil.ExpectStatus(t, mia.raw(http.MethodPost, "/api/v1/auth/logout", "", "", nil), http.StatusNoContent)
 }

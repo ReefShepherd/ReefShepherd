@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -16,16 +15,13 @@ import (
 	"github.com/reefshepherd/reefshepherd/internal/config"
 	"github.com/reefshepherd/reefshepherd/internal/db"
 	"github.com/reefshepherd/reefshepherd/internal/settings"
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 	"github.com/reefshepherd/reefshepherd/internal/webui"
 )
 
-func testLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
-}
-
 func openTestDB(t *testing.T) *db.DB {
 	t.Helper()
-	database, err := openDatabase(t.Context(), t.TempDir(), testLogger())
+	database, err := openDatabase(t.Context(), t.TempDir(), testutil.Logger(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +32,7 @@ func openTestDB(t *testing.T) *db.DB {
 func newTestApp(t *testing.T, cfg config.Config) *App {
 	t.Helper()
 	database := openTestDB(t)
-	a, err := New(cfg, testLogger(), database, settings.NewStore(database))
+	a, err := New(cfg, testutil.Logger(t), database, settings.NewStore(database))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +43,7 @@ func newTestApp(t *testing.T, cfg config.Config) *App {
 func newTestAppWithUI(t *testing.T, ui http.Handler) *App {
 	t.Helper()
 	database := openTestDB(t)
-	a, err := newWithUI(config.Config{}, testLogger(), database, settings.NewStore(database), ui)
+	a, err := newWithUI(config.Config{}, testutil.Logger(t), database, settings.NewStore(database), ui)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,17 +137,17 @@ func TestCrossOriginProtectionInFullStack(t *testing.T) {
 
 func TestNewRejectsBadTrustedOrigin(t *testing.T) {
 	database := openTestDB(t)
-	if _, err := New(config.Config{TrustedOrigins: []string{"nope"}}, testLogger(), database, settings.NewStore(database)); err == nil {
+	if _, err := New(config.Config{TrustedOrigins: []string{"nope"}}, testutil.Logger(t), database, settings.NewStore(database)); err == nil {
 		t.Error("expected error")
 	}
 }
 
 func TestNewRequiresDatabaseAndSettings(t *testing.T) {
 	database := openTestDB(t)
-	if _, err := New(config.Config{}, testLogger(), nil, settings.NewStore(database)); err == nil {
+	if _, err := New(config.Config{}, testutil.Logger(t), nil, settings.NewStore(database)); err == nil {
 		t.Error("expected an error without a database")
 	}
-	if _, err := New(config.Config{}, testLogger(), database, nil); err == nil {
+	if _, err := New(config.Config{}, testutil.Logger(t), database, nil); err == nil {
 		t.Error("expected an error without a settings store")
 	}
 }

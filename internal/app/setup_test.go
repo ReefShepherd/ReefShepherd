@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/reefshepherd/reefshepherd/internal/config"
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 	"github.com/reefshepherd/reefshepherd/internal/units"
 	"github.com/reefshepherd/reefshepherd/internal/version"
 )
@@ -28,14 +29,14 @@ func TestProtectedCallsSayWhenSetupIsPending(t *testing.T) {
 	a := newAPITestApp(t, config.Config{})
 	c := newClient(t, a)
 	for _, p := range []string{"/api/v1/me", "/api/v1/settings", "/api/v1/users", "/api/v1/me/sessions", "/api/v1/nothing"} {
-		expect(t, c.do(http.MethodGet, p, nil), http.StatusConflict, "setup_required")
+		testutil.ExpectError(t, c.do(http.MethodGet, p, nil), http.StatusConflict, "setup_required")
 	}
-	expect(t, c.do(http.MethodPost, "/api/v1/me/password", map[string]string{}), http.StatusConflict, "setup_required")
+	testutil.ExpectError(t, c.do(http.MethodPost, "/api/v1/me/password", map[string]string{}), http.StatusConflict, "setup_required")
 
 	c.setup(nil)
 	anon := newClient(t, a)
 	for _, p := range []string{"/api/v1/me", "/api/v1/settings", "/api/v1/users", "/api/v1/me/sessions", "/api/v1/nothing"} {
-		expect(t, anon.do(http.MethodGet, p, nil), http.StatusUnauthorized, "unauthorized")
+		testutil.ExpectError(t, anon.do(http.MethodGet, p, nil), http.StatusUnauthorized, "unauthorized")
 	}
 }
 
@@ -43,12 +44,12 @@ func TestPublicRoutesWorkWithoutASession(t *testing.T) {
 	a := newAPITestApp(t, config.Config{})
 	c := newClient(t, a)
 	rec := c.do(http.MethodGet, "/api/v1/auth/config", nil)
-	expectStatus(t, rec, http.StatusOK)
+	testutil.ExpectStatus(t, rec, http.StatusOK)
 	var cfg struct {
 		SetupRequired bool   `json:"setup_required"`
 		Version       string `json:"version"`
 	}
-	decodeBody(t, rec, &cfg)
+	testutil.DecodeInto(t, rec, &cfg)
 	if !cfg.SetupRequired {
 		t.Error("setup_required should be true on a fresh instance")
 	}
@@ -56,11 +57,11 @@ func TestPublicRoutesWorkWithoutASession(t *testing.T) {
 		t.Errorf("version = %q, want %q", cfg.Version, version.Version())
 	}
 	// The unit catalog is public so the setup wizard can offer units before anyone exists.
-	expectStatus(t, c.do(http.MethodGet, "/api/v1/units", nil), http.StatusOK)
+	testutil.ExpectStatus(t, c.do(http.MethodGet, "/api/v1/units", nil), http.StatusOK)
 	c.setup(nil)
 	newClient(t, a).do(http.MethodGet, "/api/v1/auth/config", nil)
 	rec = newClient(t, a).do(http.MethodGet, "/api/v1/auth/config", nil)
-	decodeBody(t, rec, &cfg)
+	testutil.DecodeInto(t, rec, &cfg)
 	if cfg.SetupRequired {
 		t.Error("setup_required should be false after setup")
 	}
@@ -77,7 +78,7 @@ func TestSetupCreatesTheAdminSettingsAndSignsThemIn(t *testing.T) {
 		"display_name":  "  Jay  ",
 	})
 	var me meBody
-	decodeBody(t, rec, &me)
+	testutil.DecodeInto(t, rec, &me)
 	if me.Username != adminName || me.Role != "admin" || me.Theme != "oled" || me.DisplayName != "Jay" || !me.HasPassword || me.Disabled || me.Locale != "en" {
 		t.Errorf("setup response = %+v", me)
 	}
@@ -87,7 +88,7 @@ func TestSetupCreatesTheAdminSettingsAndSignsThemIn(t *testing.T) {
 
 	// The cookie from setup works for protected calls and shows the same user.
 	var again meBody
-	decodeBody(t, c.do(http.MethodGet, "/api/v1/me", nil), &again)
+	testutil.DecodeInto(t, c.do(http.MethodGet, "/api/v1/me", nil), &again)
 	if again.ID != me.ID || again.Theme != "oled" {
 		t.Errorf("me = %+v", again)
 	}
@@ -102,17 +103,17 @@ func TestSetupCreatesTheAdminSettingsAndSignsThemIn(t *testing.T) {
 		Units        map[string]string `json:"units"`
 		AuthMode     string            `json:"auth_mode"`
 	}
-	decodeBody(t, c.do(http.MethodGet, "/api/v1/settings", nil), &s)
+	testutil.DecodeInto(t, c.do(http.MethodGet, "/api/v1/settings", nil), &s)
 	if s.InstanceName != "Reef HQ" || s.Timezone != "Europe/Berlin" || s.Units["temperature"] != "f" || s.Units["volume"] != "us_gal" || s.Units["salinity"] != string(defaultSalinity) || s.AuthMode != "password" {
 		t.Errorf("settings = %+v", s)
 	}
 	if done, _ := a.store.GetSetupCompleted(t.Context()); !done {
 		t.Error("setup_completed was not recorded")
 	}
-	if a.count(t, `SELECT COUNT(*) FROM users WHERE password_hash LIKE '$argon2id$%'`) != 1 {
+	if testutil.Count(t, a.db, `SELECT COUNT(*) FROM users WHERE password_hash LIKE '$argon2id$%'`) != 1 {
 		t.Error("the password was not stored as an argon2id hash")
 	}
-	if a.count(t, `SELECT COUNT(*) FROM users WHERE password_hash LIKE ?`, "%"+adminPassword+"%") != 0 {
+	if testutil.Count(t, a.db, `SELECT COUNT(*) FROM users WHERE password_hash LIKE ?`, "%"+adminPassword+"%") != 0 {
 		t.Error("the password was stored in the clear")
 	}
 }
@@ -122,17 +123,17 @@ func TestSetupIsRefusedOnceCompleted(t *testing.T) {
 	newClient(t, a).setup(nil)
 
 	rec := newClient(t, a).do(http.MethodPost, "/api/v1/setup", map[string]any{"username": "mallory", "password": otherPassword})
-	expect(t, rec, http.StatusConflict, "conflict")
+	testutil.ExpectError(t, rec, http.StatusConflict, "conflict")
 	if len(rec.Result().Cookies()) != 0 {
 		t.Error("a refused setup set a cookie")
 	}
-	if a.count(t, `SELECT COUNT(*) FROM users`) != 1 || a.count(t, `SELECT COUNT(*) FROM users WHERE username = 'mallory'`) != 0 {
+	if testutil.Count(t, a.db, `SELECT COUNT(*) FROM users`) != 1 || testutil.Count(t, a.db, `SELECT COUNT(*) FROM users WHERE username = 'mallory'`) != 0 {
 		t.Error("a second user was created")
 	}
 	// Also when the body is garbage: the answer must not depend on the input.
-	expect(t, newClient(t, a).do(http.MethodPost, "/api/v1/setup", map[string]any{"auth_mode": "disabled"}), http.StatusConflict, "conflict")
+	testutil.ExpectError(t, newClient(t, a).do(http.MethodPost, "/api/v1/setup", map[string]any{"auth_mode": "disabled"}), http.StatusConflict, "conflict")
 	// And the settings were not touched by the refused attempts.
-	expect(t, newClient(t, a).do(http.MethodPost, "/api/v1/setup", map[string]any{"username": "x", "password": otherPassword, "instance_name": "Hijacked"}), http.StatusConflict, "conflict")
+	testutil.ExpectError(t, newClient(t, a).do(http.MethodPost, "/api/v1/setup", map[string]any{"username": "x", "password": otherPassword, "instance_name": "Hijacked"}), http.StatusConflict, "conflict")
 	if name, _ := a.store.GetInstanceName(t.Context()); name == "Hijacked" {
 		t.Error("a refused setup changed the instance name")
 	}
@@ -140,13 +141,13 @@ func TestSetupIsRefusedOnceCompleted(t *testing.T) {
 
 func TestSetupIsRefusedWhenUsersAlreadyExist(t *testing.T) {
 	a := newAPITestApp(t, config.Config{})
-	a.exec(t, `INSERT INTO users (username, role) VALUES ('existing', 'admin')`)
-	expect(t, newClient(t, a).do(http.MethodPost, "/api/v1/setup", map[string]any{"username": "mallory", "password": otherPassword}), http.StatusConflict, "conflict")
-	if a.count(t, `SELECT COUNT(*) FROM users`) != 1 {
+	testutil.Exec(t, a.db, `INSERT INTO users (username, role) VALUES ('existing', 'admin')`)
+	testutil.ExpectError(t, newClient(t, a).do(http.MethodPost, "/api/v1/setup", map[string]any{"username": "mallory", "password": otherPassword}), http.StatusConflict, "conflict")
+	if testutil.Count(t, a.db, `SELECT COUNT(*) FROM users`) != 1 {
 		t.Error("setup added a user next to an existing one")
 	}
 	// Protected calls report a plain 401 rather than sending people to a setup that would refuse them.
-	expect(t, newClient(t, a).do(http.MethodGet, "/api/v1/me", nil), http.StatusUnauthorized, "unauthorized")
+	testutil.ExpectError(t, newClient(t, a).do(http.MethodGet, "/api/v1/me", nil), http.StatusUnauthorized, "unauthorized")
 }
 
 func TestOnlyOneConcurrentSetupWins(t *testing.T) {
@@ -178,8 +179,8 @@ func TestOnlyOneConcurrentSetupWins(t *testing.T) {
 	if created != 1 || refused != n-1 {
 		t.Errorf("created=%d refused=%d, want 1 and %d", created, refused, n-1)
 	}
-	if a.count(t, `SELECT COUNT(*) FROM users`) != 1 {
-		t.Errorf("%d users after racing setups", a.count(t, `SELECT COUNT(*) FROM users`))
+	if testutil.Count(t, a.db, `SELECT COUNT(*) FROM users`) != 1 {
+		t.Errorf("%d users after racing setups", testutil.Count(t, a.db, `SELECT COUNT(*) FROM users`))
 	}
 }
 
@@ -191,7 +192,7 @@ func TestSetupValidationRejectsEverythingAtOnceAndWritesNothing(t *testing.T) {
 		"timezone": "Mars/Olympus", "units": map[string]string{"temperature": "kelvin", "nonsense": "x"},
 		"instance_name": "   ",
 	})
-	b := expect(t, rec, http.StatusUnprocessableEntity, "validation")
+	b := testutil.ExpectError(t, rec, http.StatusUnprocessableEntity, "validation")
 	for _, f := range []string{"username", "password", "theme", "auth_mode", "timezone", "units.temperature", "units.nonsense", "instance_name"} {
 		if b.Error.Fields[f] == "" {
 			t.Errorf("no message for field %q: %v", f, b.Error.Fields)
@@ -200,7 +201,7 @@ func TestSetupValidationRejectsEverythingAtOnceAndWritesNothing(t *testing.T) {
 	if len(rec.Result().Cookies()) != 0 {
 		t.Error("a failed setup set a cookie")
 	}
-	if a.count(t, `SELECT COUNT(*) FROM users`) != 0 || a.count(t, `SELECT COUNT(*) FROM settings`) != 0 {
+	if testutil.Count(t, a.db, `SELECT COUNT(*) FROM users`) != 0 || testutil.Count(t, a.db, `SELECT COUNT(*) FROM settings`) != 0 {
 		t.Error("a failed setup left rows behind")
 	}
 	// Still open for a correct attempt.
@@ -210,28 +211,28 @@ func TestSetupValidationRejectsEverythingAtOnceAndWritesNothing(t *testing.T) {
 func TestSetupRollsBackWhenALateStepFails(t *testing.T) {
 	a := newAPITestApp(t, config.Config{})
 	// The final write of setup fails, after the admin, preferences and settings were already written.
-	a.exec(t, `CREATE TRIGGER fail_setup_flag BEFORE INSERT ON settings WHEN NEW.key = 'setup_completed' BEGIN SELECT RAISE(ABORT, 'disk full'); END`)
+	testutil.Exec(t, a.db, `CREATE TRIGGER fail_setup_flag BEFORE INSERT ON settings WHEN NEW.key = 'setup_completed' BEGIN SELECT RAISE(ABORT, 'disk full'); END`)
 	rec := newClient(t, a).do(http.MethodPost, "/api/v1/setup", map[string]any{
 		"username": adminName, "password": adminPassword, "instance_name": "Half Done", "timezone": "UTC",
 	})
-	expect(t, rec, http.StatusInternalServerError, "internal")
+	testutil.ExpectError(t, rec, http.StatusInternalServerError, "internal")
 	if len(rec.Result().Cookies()) != 0 {
 		t.Error("a failed setup set a cookie")
 	}
-	if a.count(t, `SELECT COUNT(*) FROM users`) != 0 || a.count(t, `SELECT COUNT(*) FROM user_preferences`) != 0 || a.count(t, `SELECT COUNT(*) FROM settings`) != 0 {
+	if testutil.Count(t, a.db, `SELECT COUNT(*) FROM users`) != 0 || testutil.Count(t, a.db, `SELECT COUNT(*) FROM user_preferences`) != 0 || testutil.Count(t, a.db, `SELECT COUNT(*) FROM settings`) != 0 {
 		t.Error("the writes before the failing step were not rolled back")
 	}
-	a.exec(t, `DROP TRIGGER fail_setup_flag`)
+	testutil.Exec(t, a.db, `DROP TRIGGER fail_setup_flag`)
 	newClient(t, a).setup(nil)
 }
 
 func TestSetupInputShapeErrors(t *testing.T) {
 	a := newAPITestApp(t, config.Config{})
 	c := newClient(t, a)
-	expect(t, c.do(http.MethodPost, "/api/v1/setup", map[string]any{"surprise": 1}), http.StatusUnprocessableEntity, "validation")
-	expect(t, c.do(http.MethodPost, "/api/v1/setup", nil), http.StatusUnsupportedMediaType, "unsupported_media_type")
-	expect(t, c.do(http.MethodPost, "/api/v1/setup", map[string]any{"username": "ok", "password": ""}), http.StatusUnprocessableEntity, "validation")
-	if a.count(t, `SELECT COUNT(*) FROM users`) != 0 {
+	testutil.ExpectError(t, c.do(http.MethodPost, "/api/v1/setup", map[string]any{"surprise": 1}), http.StatusUnprocessableEntity, "validation")
+	testutil.ExpectError(t, c.do(http.MethodPost, "/api/v1/setup", nil), http.StatusUnsupportedMediaType, "unsupported_media_type")
+	testutil.ExpectError(t, c.do(http.MethodPost, "/api/v1/setup", map[string]any{"username": "ok", "password": ""}), http.StatusUnprocessableEntity, "validation")
+	if testutil.Count(t, a.db, `SELECT COUNT(*) FROM users`) != 0 {
 		t.Error("a user was created from a bad request")
 	}
 }
@@ -240,16 +241,16 @@ func TestSetupWithoutLogin(t *testing.T) {
 	a := newAPITestApp(t, config.Config{})
 	c := newClient(t, a)
 	rec := c.do(http.MethodPost, "/api/v1/setup", map[string]any{"auth_mode": "disabled", "timezone": "UTC"})
-	expectStatus(t, rec, http.StatusCreated)
+	testutil.ExpectStatus(t, rec, http.StatusCreated)
 	if len(rec.Result().Cookies()) != 0 {
 		t.Error("no-login setup should not create a session")
 	}
 	var me meBody
-	decodeBody(t, rec, &me)
+	testutil.DecodeInto(t, rec, &me)
 	if me.Username != "admin" || me.Role != "admin" || me.HasPassword {
 		t.Errorf("admin = %+v", me)
 	}
-	if a.count(t, `SELECT COUNT(*) FROM users WHERE password_hash IS NULL`) != 1 || a.count(t, `SELECT COUNT(*) FROM sessions`) != 0 {
+	if testutil.Count(t, a.db, `SELECT COUNT(*) FROM users WHERE password_hash IS NULL`) != 1 || testutil.Count(t, a.db, `SELECT COUNT(*) FROM sessions`) != 0 {
 		t.Error("expected a passwordless admin and no sessions")
 	}
 	if mode, _ := a.store.GetAuthMode(t.Context()); mode != "disabled" {
@@ -261,17 +262,17 @@ func TestSetupWithoutLogin(t *testing.T) {
 
 	// A browser with no cookie is the admin now.
 	var who meBody
-	decodeBody(t, newClient(t, a).do(http.MethodGet, "/api/v1/me", nil), &who)
+	testutil.DecodeInto(t, newClient(t, a).do(http.MethodGet, "/api/v1/me", nil), &who)
 	if who.ID != me.ID {
 		t.Errorf("anonymous acts as %d", who.ID)
 	}
-	expect(t, newClient(t, a).login("admin", adminPassword), http.StatusConflict, "conflict")
+	testutil.ExpectError(t, newClient(t, a).login("admin", adminPassword), http.StatusConflict, "conflict")
 }
 
 func TestSetupWithoutLoginAcceptsAChosenUsername(t *testing.T) {
 	a := newAPITestApp(t, config.Config{})
 	var me meBody
-	decodeBody(t, newClient(t, a).do(http.MethodPost, "/api/v1/setup", map[string]any{"auth_mode": "disabled", "username": "reefer"}), &me)
+	testutil.DecodeInto(t, newClient(t, a).do(http.MethodPost, "/api/v1/setup", map[string]any{"auth_mode": "disabled", "username": "reefer"}), &me)
 	if me.Username != "reefer" {
 		t.Errorf("username = %q", me.Username)
 	}
@@ -280,11 +281,11 @@ func TestSetupWithoutLoginAcceptsAChosenUsername(t *testing.T) {
 func TestSetupHonoursTheEnvironmentOverride(t *testing.T) {
 	a := newAPITestApp(t, config.Config{AuthMode: config.AuthModePassword})
 	c := newClient(t, a)
-	b := expect(t, c.do(http.MethodPost, "/api/v1/setup", map[string]any{"auth_mode": "disabled"}), http.StatusConflict, "env_locked")
+	b := testutil.ExpectError(t, c.do(http.MethodPost, "/api/v1/setup", map[string]any{"auth_mode": "disabled"}), http.StatusConflict, "env_locked")
 	if b.Error.Fields["auth_mode"] == "" {
 		t.Errorf("body = %+v", b)
 	}
-	if a.count(t, `SELECT COUNT(*) FROM users`) != 0 {
+	if testutil.Count(t, a.db, `SELECT COUNT(*) FROM users`) != 0 {
 		t.Error("a user was created")
 	}
 	// Leaving the mode out follows the override.
@@ -292,7 +293,7 @@ func TestSetupHonoursTheEnvironmentOverride(t *testing.T) {
 
 	b2 := newAPITestApp(t, config.Config{AuthMode: config.AuthModeDisabled})
 	rec := newClient(t, b2).do(http.MethodPost, "/api/v1/setup", map[string]any{})
-	expectStatus(t, rec, http.StatusCreated)
+	testutil.ExpectStatus(t, rec, http.StatusCreated)
 	if mode, _ := b2.store.GetAuthMode(t.Context()); mode != "disabled" {
 		t.Errorf("mode = %q, want disabled from the override", mode)
 	}
@@ -301,7 +302,7 @@ func TestSetupHonoursTheEnvironmentOverride(t *testing.T) {
 func TestSetupWithAPasswordInNoLoginModeKeepsIt(t *testing.T) {
 	a := newAPITestApp(t, config.Config{})
 	var me meBody
-	decodeBody(t, newClient(t, a).do(http.MethodPost, "/api/v1/setup", map[string]any{"auth_mode": "disabled", "password": adminPassword}), &me)
+	testutil.DecodeInto(t, newClient(t, a).do(http.MethodPost, "/api/v1/setup", map[string]any{"auth_mode": "disabled", "password": adminPassword}), &me)
 	if !me.HasPassword {
 		t.Error("the supplied password was dropped")
 	}

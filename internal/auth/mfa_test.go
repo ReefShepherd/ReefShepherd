@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/reefshepherd/reefshepherd/internal/config"
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 )
 
 func signedInWithTOTP(t *testing.T) (*env, *client, string, []string) {
@@ -99,7 +100,7 @@ func TestConfirmRejectsAWrongCodeAndNeedsEnrolment(t *testing.T) {
 	wrong := codeAt(t, out.Secret, e.now.Add(5*time.Minute))
 	c.do(http.MethodPost, "/api/v1/me/totp/confirm", map[string]string{"code": wrong}).expect(http.StatusUnprocessableEntity, "validation")
 	c.do(http.MethodPost, "/api/v1/me/totp/confirm", map[string]string{"code": "abc"}).expect(http.StatusUnprocessableEntity, "validation")
-	if e.count(`SELECT COUNT(*) FROM user_totp WHERE confirmed_at IS NOT NULL`) != 0 || e.count(`SELECT COUNT(*) FROM user_recovery_codes`) != 0 {
+	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM user_totp WHERE confirmed_at IS NOT NULL`) != 0 || testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM user_recovery_codes`) != 0 {
 		t.Error("a wrong code activated two-step login or made recovery codes")
 	}
 
@@ -126,11 +127,11 @@ func TestConfirmGivesTenRecoveryCodesStoredHashed(t *testing.T) {
 		}
 		seen[code] = true
 		plain := strings.ReplaceAll(code, "-", "")
-		if n := e.count(`SELECT COUNT(*) FROM user_recovery_codes WHERE code_hash = ? OR code_hash = ?`, code, plain); n != 0 {
+		if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM user_recovery_codes WHERE code_hash = ? OR code_hash = ?`, code, plain); n != 0 {
 			t.Errorf("recovery code %q stored in the clear", code)
 		}
 	}
-	if n := e.count(`SELECT COUNT(*) FROM user_recovery_codes WHERE used_at IS NULL AND length(code_hash) = 64`); n != 10 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM user_recovery_codes WHERE used_at IS NULL AND length(code_hash) = 64`); n != 10 {
 		t.Errorf("hashed unused codes = %d", n)
 	}
 }
@@ -175,7 +176,7 @@ func TestLoginWithTOTPNeedsTheSecondStep(t *testing.T) {
 	if c.whoami().Code != 200 {
 		t.Error("not signed in after the second step")
 	}
-	if n := e.count(`SELECT COUNT(*) FROM sessions WHERE stage = 'mfa_pending'`); n != 0 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM sessions WHERE stage = 'mfa_pending'`); n != 0 {
 		t.Errorf("%d pending sessions left", n)
 	}
 	// The old pending cookie cannot be used to get in.
@@ -252,7 +253,7 @@ func TestRecoveryCodeWorksOnce(t *testing.T) {
 	if c.whoami().Code != 200 {
 		t.Error("not signed in after a recovery code")
 	}
-	if n := e.count(`SELECT COUNT(*) FROM user_recovery_codes WHERE used_at IS NOT NULL`); n != 1 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM user_recovery_codes WHERE used_at IS NOT NULL`); n != 1 {
 		t.Errorf("used codes = %d", n)
 	}
 
@@ -288,7 +289,7 @@ func TestMFAEndpointRequiresAPendingSessionAndOneKindOfCode(t *testing.T) {
 	c := loginStep1(t, e)
 	c.do(http.MethodPost, "/api/v1/auth/mfa", map[string]string{}).expect(http.StatusUnprocessableEntity, "validation")
 	c.do(http.MethodPost, "/api/v1/auth/mfa", map[string]string{"code": code["code"], "recovery_code": recovery[0]}).expect(http.StatusUnprocessableEntity, "validation")
-	if e.count(`SELECT COUNT(*) FROM user_recovery_codes WHERE used_at IS NOT NULL`) != 0 {
+	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM user_recovery_codes WHERE used_at IS NOT NULL`) != 0 {
 		t.Error("a rejected request spent a recovery code")
 	}
 }
@@ -302,7 +303,7 @@ func TestDisablingTOTPRemovesSecretAndCodes(t *testing.T) {
 	if r := disableTOTP(c, map[string]string{"password": goodPassword}); r.Code != http.StatusNoContent {
 		t.Fatalf("disable: %d %s", r.Code, r.Body)
 	}
-	if e.count(`SELECT COUNT(*) FROM user_totp`) != 0 || e.count(`SELECT COUNT(*) FROM user_recovery_codes`) != 0 {
+	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM user_totp`) != 0 || testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM user_recovery_codes`) != 0 {
 		t.Error("secret or recovery codes survived")
 	}
 	disableTOTP(c, map[string]string{"password": goodPassword}).expect(http.StatusNotFound, "not_found")
@@ -330,7 +331,7 @@ func TestDisablingTOTPNeedsThePassword(t *testing.T) {
 	if !containsField(r.Body.String(), "password") {
 		t.Errorf("body = %s", r.Body)
 	}
-	if e.count(`SELECT COUNT(*) FROM user_totp WHERE confirmed_at IS NOT NULL`) != 1 || e.count(`SELECT COUNT(*) FROM user_recovery_codes`) != 10 {
+	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM user_totp WHERE confirmed_at IS NOT NULL`) != 1 || testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM user_recovery_codes`) != 10 {
 		t.Fatal("two-step login was removed without the right password")
 	}
 	if c.whoami().Code != 200 {
@@ -349,7 +350,7 @@ func TestDisablingTOTPWithAWrongPasswordIsRateLimited(t *testing.T) {
 	if r.Header().Get("Retry-After") == "" {
 		t.Error("no Retry-After")
 	}
-	if e.count(`SELECT COUNT(*) FROM user_totp`) != 1 {
+	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM user_totp`) != 1 {
 		t.Error("the secret was removed while locked")
 	}
 }
@@ -368,7 +369,7 @@ func TestAccountWithoutAPasswordNeedsACurrentCodeToDisableTOTP(t *testing.T) {
 	}
 	// A password field means nothing for this account.
 	disableTOTP(c, map[string]string{"password": goodPassword}).expect(http.StatusUnprocessableEntity, "validation")
-	if e.count(`SELECT COUNT(*) FROM user_totp`) != 1 {
+	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM user_totp`) != 1 {
 		t.Fatal("removed without a valid code")
 	}
 
@@ -378,7 +379,7 @@ func TestAccountWithoutAPasswordNeedsACurrentCodeToDisableTOTP(t *testing.T) {
 	if r := disableTOTP(c, map[string]string{"code": codeAt(t, secret, e.now)}); r.Code != http.StatusNoContent {
 		t.Fatalf("disable with a code: %d %s", r.Code, r.Body)
 	}
-	if e.count(`SELECT COUNT(*) FROM user_totp`) != 0 {
+	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM user_totp`) != 0 {
 		t.Error("secret survived")
 	}
 }
@@ -405,7 +406,7 @@ func TestUnconfirmedEnrolmentCanBeCancelledWithoutProof(t *testing.T) {
 	if r := disableTOTP(c, nil); r.Code != http.StatusNoContent {
 		t.Fatalf("cancel: %d %s", r.Code, r.Body)
 	}
-	if e.count(`SELECT COUNT(*) FROM user_totp`) != 0 {
+	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM user_totp`) != 0 {
 		t.Error("pending enrolment survived")
 	}
 }
@@ -425,7 +426,7 @@ func TestResetMFARemovesTwoStepLoginAndOtherSessions(t *testing.T) {
 	if err := e.svc.ResetMFA(t.Context(), id, who.Session); err != nil {
 		t.Fatal(err)
 	}
-	if e.count(`SELECT COUNT(*) FROM user_totp`) != 0 || e.count(`SELECT COUNT(*) FROM user_recovery_codes`) != 0 {
+	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM user_totp`) != 0 || testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM user_recovery_codes`) != 0 {
 		t.Error("two-step login survived the reset")
 	}
 	if c.whoami().Code != 200 {
@@ -436,7 +437,7 @@ func TestResetMFARemovesTwoStepLoginAndOtherSessions(t *testing.T) {
 	if err := e.svc.ResetMFA(t.Context(), id, 0); err != nil {
 		t.Errorf("second reset: %v", err)
 	}
-	if e.count(`SELECT COUNT(*) FROM sessions`) != 0 {
+	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM sessions`) != 0 {
 		t.Error("keep=0 should end every session")
 	}
 }

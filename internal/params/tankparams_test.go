@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 	"github.com/reefshepherd/reefshepherd/internal/units"
 )
 
@@ -40,7 +41,7 @@ func TestTankParametersListsEveryActiveParameterWithDefaultsUntilConfigured(t *t
 func TestTankParametersReadSettingsRowsFromThePresetInsert(t *testing.T) {
 	e := newEnv(t)
 	tank, nitrate := e.addTank("Preset"), e.preset("nitrate")
-	e.exec(`INSERT INTO tank_parameters (tank_id, parameter_id, enabled, ideal_low, ideal_high, schedule_kind, interval_days, sort_order, schedule_since, updated_at)
+	testutil.Exec(e.t, e.db, `INSERT INTO tank_parameters (tank_id, parameter_id, enabled, ideal_low, ideal_high, schedule_kind, interval_days, sort_order, schedule_since, updated_at)
 		SELECT ?, id, 1, default_low, default_high, 'after_last', default_test_interval_days, sort_order, '2026-10-01T08:00:00Z', '2026-10-20T08:00:00Z'
 		FROM parameter_definitions WHERE preset_key = 'nitrate'`, tank)
 
@@ -95,7 +96,7 @@ func TestPutTankParameterEnablesAndMergesFields(t *testing.T) {
 	if o := e.tankParams(other).find(t, temp); o.Configured {
 		t.Errorf("other tank = %+v", o)
 	}
-	if n := e.count(`SELECT COUNT(*) FROM tank_parameters`); n != 1 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM tank_parameters`); n != 1 {
 		t.Errorf("%d tank_parameters rows, want 1", n)
 	}
 }
@@ -192,10 +193,10 @@ func TestLatestPerParameterIsOneStatement(t *testing.T) {
 		e.must(http.StatusOK, http.MethodPut, tpPath(tank, pid, ""), map[string]any{"enabled": true})
 	}
 	insert := func(pid int64, measuredAt string, value float64) int64 {
-		return e.insertID(`INSERT INTO test_results (tank_id, parameter_id, measured_at, value) VALUES (?, ?, ?, ?)`, tank, pid, measuredAt, value)
+		return testutil.Insert(e.t, e.db, `INSERT INTO test_results (tank_id, parameter_id, measured_at, value) VALUES (?, ?, ?, ?)`, tank, pid, measuredAt, value)
 	}
 	otherTank := e.addTank("Newer elsewhere")
-	e.insertID(`INSERT INTO test_results (tank_id, parameter_id, measured_at, value) VALUES (?, ?, '2026-12-01T00:00:00Z', 99)`, otherTank, temp)
+	testutil.Insert(e.t, e.db, `INSERT INTO test_results (tank_id, parameter_id, measured_at, value) VALUES (?, ?, '2026-12-01T00:00:00Z', 99)`, otherTank, temp)
 	insert(temp, "2026-10-20T10:00:00Z", 24)
 	insert(temp, "2026-10-22T10:00:00Z", 25)
 	insert(temp, "2026-10-21T10:00:00Z", 26) // entered last but measured earlier

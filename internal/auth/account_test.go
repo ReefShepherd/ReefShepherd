@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/reefshepherd/reefshepherd/internal/config"
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 )
 
 const newPassword = "an entirely new passphrase"
@@ -36,13 +37,13 @@ func TestPasswordChangeRevokesOtherSessions(t *testing.T) {
 	if bob.whoami().Code != 200 {
 		t.Error("another user's session was ended")
 	}
-	if e.count(`SELECT COUNT(*) FROM sessions WHERE user_id = ?`, id) != 1 {
+	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM sessions WHERE user_id = ?`, id) != 1 {
 		t.Error("alice should have exactly the session that made the change")
 	}
 
 	e.client().login("alice", goodPassword).expect(http.StatusUnauthorized, "invalid_credentials")
 	e.client().mustLogin("alice", newPassword)
-	if e.count(`SELECT COUNT(*) FROM users WHERE id = ? AND password_changed_at IS NOT NULL`, id) != 1 {
+	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM users WHERE id = ? AND password_changed_at IS NOT NULL`, id) != 1 {
 		t.Error("password_changed_at not set")
 	}
 }
@@ -50,13 +51,13 @@ func TestPasswordChangeRevokesOtherSessions(t *testing.T) {
 func TestPasswordChangeEndsPendingSecondStepSessionsToo(t *testing.T) {
 	e, signedIn, _, _ := signedInWithTOTP(t)
 	loginStep1(t, e)
-	if e.count(`SELECT COUNT(*) FROM sessions WHERE stage = 'mfa_pending'`) != 1 {
+	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM sessions WHERE stage = 'mfa_pending'`) != 1 {
 		t.Fatal("no pending session to end")
 	}
 	if r := changePassword(signedIn, goodPassword, newPassword); r.Code != http.StatusNoContent {
 		t.Fatal(r.Body)
 	}
-	if e.count(`SELECT COUNT(*) FROM sessions WHERE stage = 'mfa_pending'`) != 0 {
+	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM sessions WHERE stage = 'mfa_pending'`) != 0 {
 		t.Error("a pending session outlived a password change")
 	}
 }
@@ -187,7 +188,7 @@ func TestExpiredSessionsAreNotListed(t *testing.T) {
 	c := e.client()
 	c.mustLogin("alice", goodPassword)
 	// A second row that has run out while its user is still around.
-	e.exec(`INSERT INTO sessions (token_hash, user_id, stage, auth_method, expires_at) VALUES (x'01', ?, 'active', 'password', ?)`,
+	testutil.Exec(e.t, e.db, `INSERT INTO sessions (token_hash, user_id, stage, auth_method, expires_at) VALUES (x'01', ?, 'active', 'password', ?)`,
 		id, e.now.Add(-time.Minute).Format("2006-01-02T15:04:05Z"))
 	var list []struct {
 		ID int64 `json:"id"`

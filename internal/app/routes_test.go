@@ -15,6 +15,7 @@ import (
 	"github.com/reefshepherd/reefshepherd/internal/config"
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
 	"github.com/reefshepherd/reefshepherd/internal/settings"
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 	"github.com/reefshepherd/reefshepherd/internal/webui"
 )
 
@@ -27,10 +28,10 @@ func TestRegisterRoutesWiresRealDepsIntoPackages(t *testing.T) {
 	}
 	authSvc := auth.NewService(auth.Deps{
 		DB: database, Settings: store, Passwords: password.NewHasher(password.Params{Time: 1, MemoryKiB: 64, Threads: 1}),
-		Config: config.Config{}, Logger: testLogger(),
+		Config: config.Config{}, Logger: testutil.Logger(t),
 	})
 	mux := http.NewServeMux()
-	registerRoutes(mux, routeDeps{Config: config.Config{}, Logger: testLogger(), DB: database, Settings: store, Auth: authSvc}, webui.NewHandler(fstest.MapFS{".gitkeep": {}}))
+	registerRoutes(mux, routeDeps{Config: config.Config{}, Logger: testutil.Logger(t), DB: database, Settings: store, Auth: authSvc}, webui.NewHandler(fstest.MapFS{".gitkeep": {}}))
 
 	serve := func(method, target, body, cookie string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, target, strings.NewReader(body))
@@ -42,7 +43,7 @@ func TestRegisterRoutesWiresRealDepsIntoPackages(t *testing.T) {
 		}
 		rec := httptest.NewRecorder()
 		// The same panic guard the real stack has, so a missing dependency shows up as a 500 here.
-		httpx.Recover(testLogger())(mux).ServeHTTP(rec, r)
+		httpx.Recover(testutil.Logger(t))(mux).ServeHTTP(rec, r)
 		return rec
 	}
 
@@ -114,11 +115,11 @@ func TestFeatureRoutesLogUnexpectedFailuresToTheAppLogger(t *testing.T) {
 	tank := mustCreateTank(t, c)
 	tankPath := "/api/v1/tanks/" + strconv.FormatInt(tank.ID, 10)
 
-	a.exec(t, `ALTER TABLE parameter_definitions RENAME TO parameter_definitions_gone`)
-	a.exec(t, `ALTER TABLE dashboard_cards RENAME TO dashboard_cards_gone`)
-	a.exec(t, `ALTER TABLE tanks RENAME TO tanks_gone`)
+	testutil.Exec(t, a.db, `ALTER TABLE parameter_definitions RENAME TO parameter_definitions_gone`)
+	testutil.Exec(t, a.db, `ALTER TABLE dashboard_cards RENAME TO dashboard_cards_gone`)
+	testutil.Exec(t, a.db, `ALTER TABLE tanks RENAME TO tanks_gone`)
 	for _, path := range []string{"/api/v1/parameters", tankPath + "/dashboard", "/api/v1/tanks"} {
-		expect(t, c.do(http.MethodGet, path, nil), http.StatusInternalServerError, "internal")
+		testutil.ExpectError(t, c.do(http.MethodGet, path, nil), http.StatusInternalServerError, "internal")
 		if !loggedFailure(logs.String(), path) {
 			t.Errorf("no failure logged for %s in:\n%s", path, logs.String())
 		}

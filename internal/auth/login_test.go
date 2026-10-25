@@ -12,6 +12,7 @@ import (
 	"github.com/reefshepherd/reefshepherd/internal/auth"
 	"github.com/reefshepherd/reefshepherd/internal/auth/password"
 	"github.com/reefshepherd/reefshepherd/internal/config"
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 	"github.com/reefshepherd/reefshepherd/internal/version"
 )
 
@@ -108,7 +109,7 @@ func TestLoginSetsAHardenedCookieAndStoresOnlyItsHash(t *testing.T) {
 		t.Error("session row for the token hash not found")
 	}
 	// The raw token itself is nowhere in the table.
-	if n := e.count(`SELECT COUNT(*) FROM sessions WHERE CAST(token_hash AS TEXT) = ?`, cookie.Value); n != 0 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM sessions WHERE CAST(token_hash AS TEXT) = ?`, cookie.Value); n != 0 {
 		t.Error("the plain token was stored")
 	}
 	var stage, method, ua, ip string
@@ -182,7 +183,7 @@ func TestLoginFailuresAreIndistinguishable(t *testing.T) {
 	e.addUser("alice", goodPassword, "member")
 	e.addUser("nopass", "", "member")
 	off := e.addUser("off", goodPassword, "member")
-	e.exec(`UPDATE users SET disabled = 1 WHERE id = ?`, off)
+	testutil.Exec(e.t, e.db, `UPDATE users SET disabled = 1 WHERE id = ?`, off)
 
 	attempts := map[string][2]string{
 		"wrong password":   {"alice", "wrong password entirely"},
@@ -208,7 +209,7 @@ func TestLoginFailuresAreIndistinguishable(t *testing.T) {
 			t.Errorf("%s: body differs: %s vs %s", name, r.Body, first)
 		}
 	}
-	if e.count(`SELECT COUNT(*) FROM sessions`) != 0 {
+	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM sessions`) != 0 {
 		t.Error("a failed login created a session")
 	}
 }
@@ -271,8 +272,8 @@ func TestLoginReplacesTheSessionThePresentedCookieHeld(t *testing.T) {
 	if c.cookie == old || tokenHashCount(e, old) != 0 {
 		t.Error("the previous token survived a new login")
 	}
-	if e.count(`SELECT COUNT(*) FROM sessions`) != 1 {
-		t.Errorf("sessions = %d, want 1", e.count(`SELECT COUNT(*) FROM sessions`))
+	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM sessions`) != 1 {
+		t.Errorf("sessions = %d, want 1", testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM sessions`))
 	}
 }
 
@@ -291,7 +292,7 @@ func TestStartSessionSignsTheBrowserIn(t *testing.T) {
 	if r := c.do(http.MethodPost, "/start", nil); r.sessionCookie() == nil {
 		t.Fatal("StartSession set no cookie")
 	}
-	if got := e.count(`SELECT COUNT(*) FROM sessions WHERE user_id = ? AND stage = 'active' AND auth_method = 'oidc'`, id); got != 1 {
+	if got := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM sessions WHERE user_id = ? AND stage = 'active' AND auth_method = 'oidc'`, id); got != 1 {
 		t.Errorf("sessions = %d", got)
 	}
 	if c.whoami().Code != 200 {
@@ -368,19 +369,19 @@ func TestSessionsDieWithTheirUserOrWhenDisabled(t *testing.T) {
 	id := e.addUser("alice", goodPassword, "member")
 	c := e.client()
 	c.mustLogin("alice", goodPassword)
-	e.exec(`UPDATE users SET disabled = 1 WHERE id = ?`, id)
+	testutil.Exec(e.t, e.db, `UPDATE users SET disabled = 1 WHERE id = ?`, id)
 	c.whoami().expect(http.StatusUnauthorized, "unauthorized")
 
-	e.exec(`UPDATE users SET disabled = 0 WHERE id = ?`, id)
+	testutil.Exec(e.t, e.db, `UPDATE users SET disabled = 0 WHERE id = ?`, id)
 	if c.whoami().Code != 200 {
 		t.Error("re-enabled user should have their session back")
 	}
 	if err := e.store.SetSetupCompleted(t.Context(), true); err != nil {
 		t.Fatal(err)
 	}
-	e.exec(`DELETE FROM users WHERE id = ?`, id)
+	testutil.Exec(e.t, e.db, `DELETE FROM users WHERE id = ?`, id)
 	c.whoami().expect(http.StatusUnauthorized, "unauthorized")
-	if e.count(`SELECT COUNT(*) FROM sessions`) != 0 {
+	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM sessions`) != 0 {
 		t.Error("sessions outlived their user")
 	}
 }
@@ -402,19 +403,19 @@ func TestExpiredSessionsAreCleanedUp(t *testing.T) {
 	future := e.now.Add(time.Hour).Format("2006-01-02T15:04:05Z")
 	for i, exp := range []string{old, old, future} {
 		sum := sha256.Sum256([]byte{byte(i)})
-		e.exec(`INSERT INTO sessions (token_hash, user_id, stage, auth_method, expires_at) VALUES (?, ?, 'active', 'password', ?)`, sum[:], id, exp)
+		testutil.Exec(e.t, e.db, `INSERT INTO sessions (token_hash, user_id, stage, auth_method, expires_at) VALUES (?, ?, 'active', 'password', ?)`, sum[:], id, exp)
 	}
 	if err := e.svc.CleanupExpired(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if n := e.count(`SELECT COUNT(*) FROM sessions`); n != 1 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM sessions`); n != 1 {
 		t.Errorf("sessions after cleanup = %d, want only the unexpired one", n)
 	}
 
 	// Creating a session also sweeps what has expired meanwhile.
 	e.now = e.now.Add(2 * time.Hour)
 	e.client().mustLogin("alice", goodPassword)
-	if n := e.count(`SELECT COUNT(*) FROM sessions`); n != 1 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM sessions`); n != 1 {
 		t.Errorf("sessions after a login = %d, want just the new one", n)
 	}
 }
@@ -452,7 +453,7 @@ func TestOldPasswordHashIsUpgradedOnLogin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.exec(`UPDATE users SET password_hash = ? WHERE id = ?`, hash, id)
+	testutil.Exec(e.t, e.db, `UPDATE users SET password_hash = ? WHERE id = ?`, hash, id)
 
 	stored := func() string {
 		var h string
@@ -476,7 +477,7 @@ func TestOldPasswordHashIsUpgradedOnLogin(t *testing.T) {
 func TestUnreadableStoredHashIsAnOrdinaryLoginFailure(t *testing.T) {
 	e := newEnv(t, config.Config{})
 	id := e.addUser("alice", "", "member")
-	e.exec(`UPDATE users SET password_hash = '$2a$10$notargon' WHERE id = ?`, id)
+	testutil.Exec(e.t, e.db, `UPDATE users SET password_hash = '$2a$10$notargon' WHERE id = ?`, id)
 	e.client().login("alice", goodPassword).expect(http.StatusUnauthorized, "invalid_credentials")
 }
 

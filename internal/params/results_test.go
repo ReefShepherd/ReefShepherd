@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 )
 
 func resultPath(id int64) string { return "/api/v1/results/" + strconv.FormatInt(id, 10) }
@@ -48,7 +50,7 @@ func TestMultiParameterEntryStoresEveryReadingAtOneTime(t *testing.T) {
 	if out.Results[0].ID >= out.Results[1].ID || out.Results[1].ID >= out.Results[2].ID {
 		t.Errorf("ids = %d, %d, %d", out.Results[0].ID, out.Results[1].ID, out.Results[2].ID)
 	}
-	if n := e.count(`SELECT COUNT(*) FROM test_results WHERE measured_at = '2026-10-24T12:30:00Z'`); n != 3 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM test_results WHERE measured_at = '2026-10-24T12:30:00Z'`); n != 3 {
 		t.Errorf("%d rows at the shared time, want 3", n)
 	}
 }
@@ -70,7 +72,7 @@ func TestEntryIsAllOrNothing(t *testing.T) {
 	tank := e.addTank("Atomic")
 	ph, calcium := e.preset("ph"), e.preset("calcium")
 	// The database refuses the second reading, after the first has already been written.
-	e.exec(`CREATE TRIGGER refuse_99 BEFORE INSERT ON test_results WHEN NEW.value = 99 BEGIN SELECT RAISE(ABORT, 'refused'); END`)
+	testutil.Exec(e.t, e.db, `CREATE TRIGGER refuse_99 BEFORE INSERT ON test_results WHEN NEW.value = 99 BEGIN SELECT RAISE(ABORT, 'refused'); END`)
 
 	hooked := 0
 	e.svc.OnResultCreated = func(context.Context, Result) { hooked++ }
@@ -78,7 +80,7 @@ func TestEntryIsAllOrNothing(t *testing.T) {
 		"measured_at": "2026-10-24T09:00:00Z",
 		"results":     []entry{val(ph, 8.1), val(calcium, 99)},
 	})
-	if n := e.count(`SELECT COUNT(*) FROM test_results`); n != 0 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM test_results`); n != 0 {
 		t.Errorf("%d results left behind by a failed entry", n)
 	}
 	if hooked != 0 {
@@ -86,7 +88,7 @@ func TestEntryIsAllOrNothing(t *testing.T) {
 	}
 	// The same entry without the refused value goes through.
 	e.addResults(tank, "2026-10-24T09:00:00Z", val(ph, 8.1), val(calcium, 98))
-	if n := e.count(`SELECT COUNT(*) FROM test_results`); n != 2 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM test_results`); n != 2 {
 		t.Errorf("%d results, want 2", n)
 	}
 }
@@ -129,12 +131,12 @@ func TestEntryIsCheckedInsideTheWriteTransaction(t *testing.T) {
 			}
 
 			r := <-done
-			var b errBody
+			var b testutil.ErrorBody
 			_ = json.Unmarshal(r.Body.Bytes(), &b)
 			if r.Code != tc.status || b.Error.Code != tc.code || (tc.field != "" && b.Error.Fields[tc.field] == "") {
 				t.Errorf("status=%d code=%q fields=%v, want %d %q %s; body=%s", r.Code, b.Error.Code, b.Error.Fields, tc.status, tc.code, tc.field, r.Body)
 			}
-			if n := e.count(`SELECT COUNT(*) FROM test_results`); n != 0 {
+			if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM test_results`); n != 0 {
 				t.Errorf("%d results stored", n)
 			}
 		})
@@ -177,7 +179,7 @@ func TestEntryValidationReportsEveryProblemAndStoresNothing(t *testing.T) {
 			e.invalid(http.MethodPost, path, tc.body, tc.fields...)
 		})
 	}
-	if n := e.count(`SELECT COUNT(*) FROM test_results`); n != 0 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM test_results`); n != 0 {
 		t.Errorf("%d results stored by rejected entries", n)
 	}
 	e.fail(http.StatusNotFound, "not_found", http.MethodPost, tankPath(9999, "/results"), map[string]any{"results": []entry{val(ph, 8)}})
@@ -198,7 +200,7 @@ func TestPostingResultsNeedsASignedInUser(t *testing.T) {
 	if r.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, body %s", r.Code, r.Body)
 	}
-	if n := e.count(`SELECT COUNT(*) FROM test_results`); n != 0 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM test_results`); n != 0 {
 		t.Errorf("%d results stored without a user", n)
 	}
 }
@@ -213,7 +215,7 @@ func TestOnResultCreatedRunsAfterCommitForEachResult(t *testing.T) {
 	var visible []int
 	e.svc.OnResultCreated = func(ctx context.Context, r Result) {
 		got = append(got, r)
-		visible = append(visible, e.count(`SELECT COUNT(*) FROM test_results WHERE id = ?`, r.ID))
+		visible = append(visible, testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM test_results WHERE id = ?`, r.ID))
 	}
 	created := e.addResults(tank, "2026-10-24T09:00:00.75Z", val(ph, 8.1), entry{ParameterID: calcium, Value: ptr(421.0), Note: "x"})
 	if len(got) != 2 || !slices.Equal(visible, []int{1, 1}) {
@@ -398,13 +400,13 @@ func TestDeletesRefuseNonJSONBodies(t *testing.T) {
 
 	for _, target := range []string{resultPath(result.ID), paramPath(custom, "")} {
 		r := e.doRaw(http.MethodDelete, target, "text/plain", "please")
-		var b errBody
+		var b testutil.ErrorBody
 		_ = json.Unmarshal(r.Body.Bytes(), &b)
 		if r.Code != http.StatusUnsupportedMediaType || b.Error.Code != "unsupported_media_type" {
 			t.Errorf("DELETE %s with a text body: status=%d code=%q", target, r.Code, b.Error.Code)
 		}
 	}
-	if n := e.count(`SELECT COUNT(*) FROM test_results`) + e.count(`SELECT COUNT(*) FROM parameter_definitions WHERE id = ?`, custom); n != 2 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM test_results`) + testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM parameter_definitions WHERE id = ?`, custom); n != 2 {
 		t.Errorf("a refused delete removed something (%d rows left, want 2)", n)
 	}
 	if r := e.doRaw(http.MethodDelete, resultPath(result.ID), "application/json", ""); r.Code != http.StatusNoContent {
