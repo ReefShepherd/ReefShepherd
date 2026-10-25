@@ -14,7 +14,7 @@ export type ValidationCode =
   | 'timezone'
   | 'name_long';
 
-export const passwordLimits = { min: 12, max: 256 } as const;
+export const passwordLimits = { min: 8, max: 256 } as const;
 export const displayNameMax = 100;
 
 const usernamePattern = /^[A-Za-z0-9._@-]{2,64}$/;

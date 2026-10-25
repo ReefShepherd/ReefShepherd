@@ -158,7 +158,9 @@ legend {
 
 .field input:not([type='checkbox']):not([type='radio']),
 .field select {
+  box-sizing: border-box;
   width: 100%;
+  min-width: 0;
   min-height: var(--touch);
   padding: 0 var(--space-2);
   border: 1px solid var(--border);
@@ -166,6 +168,21 @@ legend {
   background: var(--bg);
   color: var(--text);
   font: inherit;
+}
+
+.field input[type='date'],
+.field input[type='time'],
+.field input[type='datetime-local'] {
+  max-width: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+  text-align: left;
+}
+
+/* iOS Safari centers the value and gives it an intrinsic width unless the inner element is reset. */
+.field input::-webkit-date-and-time-value {
+  min-width: 0;
+  text-align: left;
 }
 
 .field input[aria-invalid='true'],

@@ -89,7 +89,13 @@ jobs:
       - working-directory: web
         run: |
           npx playwright install --with-deps chromium
+          npx playwright install --with-deps webkit
           npm run test:e2e
+      # Safari's engine, for the date and time input layout on a phone-sized screen.
+      - working-directory: web
+        env:
+          E2E_BROWSER: webkit
+        run: npx playwright test date-inputs
       - if: failure()
         uses: actions/upload-artifact@v7
         with:

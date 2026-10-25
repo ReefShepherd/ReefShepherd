@@ -19,7 +19,7 @@ import (
 
 // Length limits in characters.
 const (
-	MinLength = 12
+	MinLength = 8
 	MaxLength = 256
 )
 

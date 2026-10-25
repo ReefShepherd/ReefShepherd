@@ -59,10 +59,10 @@ test('first-run setup creates the instance and signs the administrator in', asyn
 
   // A short password is refused before anything is sent.
   await page.getByLabel('Username', { exact: true }).fill(username);
-  await page.getByLabel('Password', { exact: true }).fill('too short');
-  await page.getByLabel('Repeat the password').fill('too short');
+  await page.getByLabel('Password', { exact: true }).fill('short');
+  await page.getByLabel('Repeat the password').fill('short');
   await page.getByRole('button', { name: 'Finish setup' }).click();
-  await expect(page.getByText('Use at least 12 characters.')).toBeVisible();
+  await expect(page.getByText('Use at least 8 characters.')).toBeVisible();
   await expect(page.getByLabel('Password', { exact: true })).toBeFocused();
 
   await page.getByLabel('Password', { exact: true }).fill(password);

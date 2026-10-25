@@ -13,8 +13,13 @@ export default defineConfig({
   use: {
     baseURL: `http://127.0.0.1:${port}`,
     trace: 'retain-on-failure',
-    // Unset uses Playwright's own browser; on this machine set PLAYWRIGHT_CHROMIUM_PATH=/usr/bin/chromium.
-    launchOptions: { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH || undefined }
+    // Unset uses Playwright's own browser; on this machine set PLAYWRIGHT_CHROMIUM_PATH=/usr/bin/chromium, which a WebKit run ignores.
+    launchOptions: {
+      executablePath:
+        process.env.E2E_BROWSER === 'webkit'
+          ? undefined
+          : process.env.PLAYWRIGHT_CHROMIUM_PATH || undefined
+    }
   },
   webServer: {
     // A fresh data directory every run, because the auth specs start from first-run setup.

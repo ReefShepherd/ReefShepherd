@@ -50,7 +50,7 @@
   "instance_timezone": "Timezone",
   "instance_timezone_hint": "Dates and reminders use this timezone.",
   "instance_units": "Units",
-  "instance_units_hint": "Changing units never changes saved data.",
+  "instance_units_hint": "Switching units shows your saved readings, ranges and charts in the new unit, and nothing is lost.",
   "instance_login_mode": "Login",
   "instance_login_needs_password": "Set a password for your account first, then you can turn login on.",
   "instance_login_warning": "With login off, anyone who can reach this address can see and change everything. Only do this on a network you trust.",

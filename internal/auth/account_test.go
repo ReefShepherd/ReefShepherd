@@ -90,7 +90,7 @@ func TestPasswordChangeEnforcesLengthRules(t *testing.T) {
 	c := e.client()
 	c.mustLogin("alice", goodPassword)
 
-	short := changePassword(c, goodPassword, "elevenchars")
+	short := changePassword(c, goodPassword, "sevench")
 	short.expect(http.StatusUnprocessableEntity, "validation")
 	if !containsField(short.Body.String(), "new_password") {
 		t.Errorf("body = %s", short.Body)
@@ -100,10 +100,10 @@ func TestPasswordChangeEnforcesLengthRules(t *testing.T) {
 		long[i] = 'x'
 	}
 	changePassword(c, goodPassword, string(long)).expect(http.StatusUnprocessableEntity, "validation")
-	if r := changePassword(c, goodPassword, "exactly12chr"); r.Code != http.StatusNoContent {
-		t.Errorf("12 characters: %d %s", r.Code, r.Body)
+	if r := changePassword(c, goodPassword, "exactly8"); r.Code != http.StatusNoContent {
+		t.Errorf("8 characters: %d %s", r.Code, r.Body)
 	}
-	e.client().mustLogin("alice", "exactly12chr")
+	e.client().mustLogin("alice", "exactly8")
 }
 
 func TestWrongCurrentPasswordIsRateLimited(t *testing.T) {

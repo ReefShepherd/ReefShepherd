@@ -32,17 +32,17 @@ describe('validateUsername', () => {
 });
 
 describe('validateNewPassword', () => {
-  it('requires 12 to 256 characters', () => {
+  it('requires 8 to 256 characters', () => {
     expect(validateNewPassword('')).toBe('required');
-    expect(validateNewPassword('a'.repeat(11))).toBe('password_short');
-    expect(validateNewPassword('a'.repeat(12))).toBeNull();
+    expect(validateNewPassword('a'.repeat(7))).toBe('password_short');
+    expect(validateNewPassword('a'.repeat(8))).toBeNull();
     expect(validateNewPassword('a'.repeat(256))).toBeNull();
     expect(validateNewPassword('a'.repeat(257))).toBe('password_long');
   });
 
   it('counts characters, not UTF-16 units', () => {
-    expect(validateNewPassword('🐠'.repeat(12))).toBeNull();
-    expect(validateNewPassword('🐠'.repeat(11))).toBe('password_short');
+    expect(validateNewPassword('🐠'.repeat(8))).toBeNull();
+    expect(validateNewPassword('🐠'.repeat(7))).toBe('password_short');
   });
 
   it('keeps spaces, since passphrases have them', () => {
@@ -129,7 +129,7 @@ describe('collectErrors', () => {
   });
 
   it('writes the limits into the password messages', () => {
-    expect(validationText('password_short')).toContain('12');
+    expect(validationText('password_short')).toContain('8');
     expect(validationText('password_long')).toContain('256');
   });
 });

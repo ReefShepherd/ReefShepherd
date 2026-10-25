@@ -109,15 +109,15 @@ func TestValidate(t *testing.T) {
 		in   string
 		want error
 	}{
-		{"eleven characters", strings.Repeat("a", 11), ErrTooShort},
-		{"twelve characters", strings.Repeat("a", 12), nil},
+		{"seven characters", strings.Repeat("a", 7), ErrTooShort},
+		{"eight characters", strings.Repeat("a", 8), nil},
 		{"256 characters", strings.Repeat("a", 256), nil},
 		{"257 characters", strings.Repeat("a", 257), ErrTooLong},
-		{"characters not bytes, short", strings.Repeat("é", 11), ErrTooShort},
-		{"characters not bytes, long enough", strings.Repeat("é", 12), nil},
+		{"characters not bytes, short", strings.Repeat("é", 7), ErrTooShort},
+		{"characters not bytes, long enough", strings.Repeat("é", 8), nil},
 		{"characters not bytes, upper bound", strings.Repeat("é", 256), nil},
-		{"only spaces still counts", strings.Repeat(" ", 12), nil},
-		{"invalid utf-8", strings.Repeat("a", 12) + "\xff", ErrInvalidText},
+		{"only spaces still counts", strings.Repeat(" ", 8), nil},
+		{"invalid utf-8", strings.Repeat("a", 8) + "\xff", ErrInvalidText},
 		{"empty", "", ErrTooShort},
 	}
 	for _, tc := range tests {

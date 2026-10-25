@@ -11,7 +11,7 @@
   "setup_instance_name_hint": "Shown on the sign-in page, such as the room your tanks are in.",
   "setup_timezone": "Timezone",
   "setup_timezone_hint": "Dates and reminders use this timezone, not your browser's.",
-  "setup_units_intro": "Choose how values are shown. Changing units later never changes saved data.",
+  "setup_units_intro": "Choose how values are shown. If you switch units later, your saved readings, ranges and charts are shown in the new unit, and nothing is lost.",
   "setup_access_title": "Who can use this?",
   "setup_login_on": "Require a login",
   "setup_login_on_hint": "Recommended. Everyone signs in with a username and password.",
