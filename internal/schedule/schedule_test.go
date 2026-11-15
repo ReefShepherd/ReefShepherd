@@ -1,6 +1,7 @@
 package schedule
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -8,7 +9,7 @@ import (
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
 )
 
-func ip(v int) *int       { return &v }
+func ip(v int64) *int64   { return &v }
 func sp(v string) *string { return &v }
 
 func TestParse(t *testing.T) {
@@ -149,13 +150,47 @@ func TestColumnsRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v: %v", c, err)
 		}
-		if got := s.Columns(); !reflect.DeepEqual(got, c) {
+		if got := s.Columns(); !got.Equal(c) {
 			t.Errorf("Columns() = %+v\nwant       %+v", got, c)
 		}
 	}
 	// A hand-built schedule with zero interval_weeks still stores the column default.
 	if got := (Schedule{Kind: Monthly, MonthDay: 1}).Columns().IntervalWeeks; got != 1 {
 		t.Errorf("IntervalWeeks = %d, want 1", got)
+	}
+}
+
+func TestColumnsEqual(t *testing.T) {
+	base := Columns{Kind: "weekly", IntervalDays: ip(2), Weekdays: ip(21), IntervalWeeks: 2, MonthDay: ip(3), AnchorDate: sp("2026-10-26"), DueTime: "18:30"}
+	same := Columns{Kind: "weekly", IntervalDays: ip(2), Weekdays: ip(21), IntervalWeeks: 2, MonthDay: ip(3), AnchorDate: sp("2026-10-26"), DueTime: "18:30"}
+	if !base.Equal(same) || !(Columns{}).Equal(Columns{}) {
+		t.Error("equal values with separate pointers are not Equal")
+	}
+	for name, other := range map[string]Columns{
+		"kind":                {Kind: "monthly", IntervalDays: ip(2), Weekdays: ip(21), IntervalWeeks: 2, MonthDay: ip(3), AnchorDate: sp("2026-10-26"), DueTime: "18:30"},
+		"interval_days value": {Kind: "weekly", IntervalDays: ip(3), Weekdays: ip(21), IntervalWeeks: 2, MonthDay: ip(3), AnchorDate: sp("2026-10-26"), DueTime: "18:30"},
+		"interval_days unset": {Kind: "weekly", Weekdays: ip(21), IntervalWeeks: 2, MonthDay: ip(3), AnchorDate: sp("2026-10-26"), DueTime: "18:30"},
+		"weekdays":            {Kind: "weekly", IntervalDays: ip(2), Weekdays: ip(22), IntervalWeeks: 2, MonthDay: ip(3), AnchorDate: sp("2026-10-26"), DueTime: "18:30"},
+		"interval_weeks":      {Kind: "weekly", IntervalDays: ip(2), Weekdays: ip(21), IntervalWeeks: 3, MonthDay: ip(3), AnchorDate: sp("2026-10-26"), DueTime: "18:30"},
+		"month_day":           {Kind: "weekly", IntervalDays: ip(2), Weekdays: ip(21), IntervalWeeks: 2, MonthDay: ip(4), AnchorDate: sp("2026-10-26"), DueTime: "18:30"},
+		"anchor_date value":   {Kind: "weekly", IntervalDays: ip(2), Weekdays: ip(21), IntervalWeeks: 2, MonthDay: ip(3), AnchorDate: sp("2026-10-27"), DueTime: "18:30"},
+		"anchor_date unset":   {Kind: "weekly", IntervalDays: ip(2), Weekdays: ip(21), IntervalWeeks: 2, MonthDay: ip(3), DueTime: "18:30"},
+		"due_time":            {Kind: "weekly", IntervalDays: ip(2), Weekdays: ip(21), IntervalWeeks: 2, MonthDay: ip(3), AnchorDate: sp("2026-10-26"), DueTime: "18:31"},
+	} {
+		if base.Equal(other) || other.Equal(base) {
+			t.Errorf("a difference in %s still counts as Equal", name)
+		}
+	}
+}
+
+func TestColumnsJSONNames(t *testing.T) {
+	got, err := json.Marshal(Columns{Kind: "weekly", Weekdays: ip(21), IntervalWeeks: 2, AnchorDate: sp("2026-10-26"), DueTime: "18:30"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"kind":"weekly","interval_days":null,"weekdays":21,"interval_weeks":2,"month_day":null,"anchor_date":"2026-10-26","due_time":"18:30"}`
+	if string(got) != want {
+		t.Errorf("JSON = %s\nwant   %s", got, want)
 	}
 }
 

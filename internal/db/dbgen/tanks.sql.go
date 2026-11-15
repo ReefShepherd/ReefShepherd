@@ -7,7 +7,6 @@ package dbgen
 
 import (
 	"context"
-	"strings"
 )
 
 const archiveTank = `-- name: ArchiveTank :one
@@ -122,53 +121,6 @@ func (q *Queries) DeleteTank(ctx context.Context, id int64) (int64, error) {
 	return result.RowsAffected()
 }
 
-const enablePresetParameters = `-- name: EnablePresetParameters :execrows
-INSERT INTO tank_parameters (
-    tank_id, parameter_id, enabled, ideal_low, ideal_high, schedule_kind, interval_days, sort_order, schedule_since, updated_at
-)
-SELECT
-    ?,
-    id,
-    1,
-    default_low,
-    default_high,
-    CASE WHEN default_test_interval_days >= 1 THEN 'after_last' ELSE 'none' END,
-    CASE WHEN default_test_interval_days >= 1 THEN default_test_interval_days END,
-    sort_order,
-    ?,
-    ?
-FROM parameter_definitions
-WHERE archived_at IS NULL AND preset_key IN (/*SLICE:preset_keys*/?)
-`
-
-type EnablePresetParametersParams struct {
-	TankID        int64
-	ScheduleSince string
-	UpdatedAt     string
-	PresetKeys    []*string
-}
-
-func (q *Queries) EnablePresetParameters(ctx context.Context, arg EnablePresetParametersParams) (int64, error) {
-	query := enablePresetParameters
-	var queryParams []interface{}
-	queryParams = append(queryParams, arg.TankID)
-	queryParams = append(queryParams, arg.ScheduleSince)
-	queryParams = append(queryParams, arg.UpdatedAt)
-	if len(arg.PresetKeys) > 0 {
-		for _, v := range arg.PresetKeys {
-			queryParams = append(queryParams, v)
-		}
-		query = strings.Replace(query, "/*SLICE:preset_keys*/?", strings.Repeat(",?", len(arg.PresetKeys))[1:], 1)
-	} else {
-		query = strings.Replace(query, "/*SLICE:preset_keys*/?", "NULL", 1)
-	}
-	result, err := q.db.ExecContext(ctx, query, queryParams...)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const getTank = `-- name: GetTank :one
 SELECT
     id,
@@ -201,36 +153,6 @@ func (q *Queries) GetTank(ctx context.Context, id int64) (Tank, error) {
 		&i.UpdatedAt,
 	)
 	return i, err
-}
-
-const listActivePresetKeys = `-- name: ListActivePresetKeys :many
-SELECT CAST(preset_key AS TEXT) AS preset_key
-FROM parameter_definitions
-WHERE preset_key IS NOT NULL AND archived_at IS NULL
-ORDER BY sort_order, id
-`
-
-func (q *Queries) ListActivePresetKeys(ctx context.Context) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listActivePresetKeys)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []string{}
-	for rows.Next() {
-		var preset_key string
-		if err := rows.Scan(&preset_key); err != nil {
-			return nil, err
-		}
-		items = append(items, preset_key)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const listTanks = `-- name: ListTanks :many

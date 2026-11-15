@@ -76,29 +76,44 @@ type Schedule struct {
 	DueTime       TimeOfDay
 }
 
-// Columns mirrors the stored schedule columns, with nil for SQL NULL.
+// Columns is a schedule as the API and the stored columns carry it, with nil for SQL NULL and JSON null.
 type Columns struct {
-	Kind          string
-	IntervalDays  *int
-	Weekdays      *int
-	IntervalWeeks int
-	MonthDay      *int
-	AnchorDate    *string
-	DueTime       string
+	Kind          string  `json:"kind"`
+	IntervalDays  *int64  `json:"interval_days"`
+	Weekdays      *int64  `json:"weekdays"`
+	IntervalWeeks int64   `json:"interval_weeks"`
+	MonthDay      *int64  `json:"month_day"`
+	AnchorDate    *string `json:"anchor_date"`
+	DueTime       string  `json:"due_time"`
 }
 
-func intOrZero(p *int) int {
+// Equal reports whether both hold the same values, comparing what the pointers point at.
+func (c Columns) Equal(o Columns) bool {
+	return c.Kind == o.Kind && c.IntervalWeeks == o.IntervalWeeks && c.DueTime == o.DueTime &&
+		sameValue(c.IntervalDays, o.IntervalDays) && sameValue(c.Weekdays, o.Weekdays) &&
+		sameValue(c.MonthDay, o.MonthDay) && sameValue(c.AnchorDate, o.AnchorDate)
+}
+
+func sameValue[T comparable](a, b *T) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func intOrZero(p *int64) int {
 	if p == nil {
 		return 0
 	}
-	return *p
+	return int(*p)
 }
 
-func intPtr(v int) *int {
+func intPtr(v int) *int64 {
 	if v == 0 {
 		return nil
 	}
-	return &v
+	n := int64(v)
+	return &n
 }
 
 // Parse validates stored columns (empty due time means the default, zero interval_weeks means 1) and clears the ones the kind does not use.
@@ -107,7 +122,7 @@ func Parse(c Columns) (Schedule, error) {
 		Kind:          Kind(c.Kind),
 		IntervalDays:  intOrZero(c.IntervalDays),
 		Weekdays:      intOrZero(c.Weekdays),
-		IntervalWeeks: c.IntervalWeeks,
+		IntervalWeeks: int(c.IntervalWeeks),
 		MonthDay:      intOrZero(c.MonthDay),
 		DueTime:       DefaultDueTime(),
 	}
@@ -140,7 +155,7 @@ func (s Schedule) Columns() Columns {
 		Kind:          string(s.Kind),
 		IntervalDays:  intPtr(s.IntervalDays),
 		Weekdays:      intPtr(s.Weekdays),
-		IntervalWeeks: s.IntervalWeeks,
+		IntervalWeeks: int64(s.IntervalWeeks),
 		MonthDay:      intPtr(s.MonthDay),
 		DueTime:       s.DueTime.String(),
 	}

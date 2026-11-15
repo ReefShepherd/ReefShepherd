@@ -54,9 +54,9 @@ type paramEntry struct {
 type paramIndex map[int64]paramEntry
 
 func (s *Service) paramIndex(ctx context.Context, q dbgen.DBTX, tankID int64) (paramIndex, error) {
-	rows, err := db.Q(q).ListTankParameters(ctx, dbgen.ListTankParametersParams{TankID: tankID, IncludeArchived: 1})
+	rows, err := tankParameterRows(ctx, q, tankID, true)
 	if err != nil {
-		return nil, fmt.Errorf("list tank parameters: %w", err)
+		return nil, err
 	}
 	d := s.newDisplay(ctx)
 	idx := make(paramIndex, len(rows))
@@ -133,18 +133,13 @@ func (s *Service) CreateResults(ctx context.Context, tankID, userID int64, in Cr
 		}
 		stamp := db.FormatTime(s.now())
 		for _, rd := range readings {
-			row := dbgen.TestResult{
+			row, err := q.InsertTestResult(ctx, dbgen.InsertTestResultParams{
 				TankID: tankID, ParameterID: rd.parameterID, MeasuredAt: db.FormatTime(measured), Value: rd.value,
 				Note: rd.note, Source: sourceManual, CreatedBy: &userID, CreatedAt: stamp, UpdatedAt: stamp,
-			}
-			id, err := q.InsertTestResult(ctx, dbgen.InsertTestResultParams{
-				TankID: row.TankID, ParameterID: row.ParameterID, MeasuredAt: row.MeasuredAt, Value: row.Value,
-				Note: row.Note, Source: row.Source, CreatedBy: row.CreatedBy, CreatedAt: stamp, UpdatedAt: stamp,
 			})
 			if err != nil {
 				return fmt.Errorf("insert result: %w", err)
 			}
-			row.ID = id
 			stored = append(stored, row)
 		}
 		return nil
@@ -444,14 +439,10 @@ func (s *Service) GetSeries(ctx context.Context, tankID, parameterID int64, from
 	if err := tanks.Require(ctx, s.r, tankID); err != nil {
 		return Series{}, err
 	}
-	rows, err := db.Q(s.r).ListTankParameters(ctx, dbgen.ListTankParametersParams{TankID: tankID, ParameterID: &parameterID, IncludeArchived: 1})
+	row, err := tankParameterRow(ctx, s.r, tankID, parameterID)
 	if err != nil {
-		return Series{}, fmt.Errorf("read tank parameter: %w", err)
+		return Series{}, err
 	}
-	if len(rows) == 0 {
-		return Series{}, errNoParameter
-	}
-	row := rows[0]
 	m, err := s.newDisplay(ctx).meta(row.UnitFamily, row.UnitLabel, row.Decimals)
 	if err != nil {
 		return Series{}, err

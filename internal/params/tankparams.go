@@ -3,9 +3,7 @@ package params
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
-	"reflect"
 	"time"
 
 	"github.com/reefshepherd/reefshepherd/internal/db"
@@ -14,32 +12,6 @@ import (
 	"github.com/reefshepherd/reefshepherd/internal/schedule"
 	"github.com/reefshepherd/reefshepherd/internal/tanks"
 )
-
-// Schedule is a test schedule as the API reads and writes it.
-type Schedule struct {
-	Kind          string  `json:"kind"`
-	IntervalDays  *int    `json:"interval_days"`
-	Weekdays      *int    `json:"weekdays"`
-	IntervalWeeks int     `json:"interval_weeks"`
-	MonthDay      *int    `json:"month_day"`
-	AnchorDate    *string `json:"anchor_date"`
-	DueTime       string  `json:"due_time"`
-}
-
-func scheduleOf(s schedule.Schedule) Schedule {
-	c := s.Columns()
-	return Schedule{
-		Kind: c.Kind, IntervalDays: c.IntervalDays, Weekdays: c.Weekdays, IntervalWeeks: c.IntervalWeeks,
-		MonthDay: c.MonthDay, AnchorDate: c.AnchorDate, DueTime: c.DueTime,
-	}
-}
-
-func (s Schedule) columns() schedule.Columns {
-	return schedule.Columns{
-		Kind: s.Kind, IntervalDays: s.IntervalDays, Weekdays: s.Weekdays, IntervalWeeks: s.IntervalWeeks,
-		MonthDay: s.MonthDay, AnchorDate: s.AnchorDate, DueTime: s.DueTime,
-	}
-}
 
 // Latest is the newest result of a parameter in a tank.
 type Latest struct {
@@ -59,12 +31,12 @@ type TankParameter struct {
 	UnitLabel   string  `json:"unit_label"`
 	Decimals    int     `json:"decimals"`
 	// Configured is false for a parameter the tank has no settings row for, whose other settings then show the defaults.
-	Configured bool     `json:"configured"`
-	Enabled    bool     `json:"enabled"`
-	IdealLow   *float64 `json:"ideal_low"`
-	IdealHigh  *float64 `json:"ideal_high"`
-	Schedule   Schedule `json:"schedule"`
-	SortOrder  int64    `json:"sort_order"`
+	Configured bool             `json:"configured"`
+	Enabled    bool             `json:"enabled"`
+	IdealLow   *float64         `json:"ideal_low"`
+	IdealHigh  *float64         `json:"ideal_high"`
+	Schedule   schedule.Columns `json:"schedule"`
+	SortOrder  int64            `json:"sort_order"`
 	// Latest is null until the parameter has been tested in this tank.
 	Latest *Latest `json:"latest"`
 	// NextDue and Overdue are only set for an enabled parameter with a schedule.
@@ -98,22 +70,6 @@ func deref[T any](p *T) T {
 	return *p
 }
 
-func toInt64Ptr(p *int) *int64 {
-	if p == nil {
-		return nil
-	}
-	v := int64(*p)
-	return &v
-}
-
-func toIntPtr(p *int64) *int {
-	if p == nil {
-		return nil
-	}
-	v := int(*p)
-	return &v
-}
-
 // rangeOf returns the ideal range in canonical units, the definition's default while the tank has no settings.
 func rangeOf(row dbgen.ListTankParametersRow) (low, high *float64) {
 	if row.Enabled == nil {
@@ -124,26 +80,16 @@ func rangeOf(row dbgen.ListTankParametersRow) (low, high *float64) {
 
 func settingsOf(row dbgen.ListTankParametersRow) (tankSettings, error) {
 	low, high := rangeOf(row)
-	if row.Enabled == nil {
-		cols := schedule.Columns{Kind: string(schedule.None), IntervalWeeks: 1}
-		if n := deref(row.DefaultTestIntervalDays); n >= 1 {
-			iv := int(n)
-			cols = schedule.Columns{Kind: string(schedule.AfterLast), IntervalDays: &iv, IntervalWeeks: 1}
-		}
-		sched, err := schedule.Parse(cols)
-		if err != nil {
-			// Not wrapped: a bad stored schedule is a server fault and must not reach the client as a field error.
-			return tankSettings{}, fmt.Errorf("default schedule of parameter %d: %v", row.ParameterID, err) //nolint:errorlint // see above
-		}
-		return tankSettings{low: low, high: high, sched: sched, sortOrder: row.DefaultSortOrder}, nil
-	}
 	sched, err := schedule.Parse(schedule.Columns{
-		Kind: deref(row.ScheduleKind), IntervalDays: toIntPtr(row.IntervalDays), Weekdays: toIntPtr(row.Weekdays),
-		IntervalWeeks: int(deref(row.IntervalWeeks)), MonthDay: toIntPtr(row.MonthDay), AnchorDate: row.AnchorDate,
-		DueTime: deref(row.DueTime),
+		Kind: row.ScheduleKind, IntervalDays: row.IntervalDays, Weekdays: row.Weekdays, IntervalWeeks: deref(row.IntervalWeeks),
+		MonthDay: row.MonthDay, AnchorDate: row.AnchorDate, DueTime: deref(row.DueTime),
 	})
 	if err != nil {
-		return tankSettings{}, fmt.Errorf("schedule of parameter %d: %v", row.ParameterID, err) //nolint:errorlint // not wrapped, as above
+		// Not wrapped: a bad stored schedule is a server fault and must not reach the client as a field error.
+		return tankSettings{}, fmt.Errorf("schedule of parameter %d: %v", row.ParameterID, err) //nolint:errorlint // see above
+	}
+	if row.Enabled == nil {
+		return tankSettings{low: low, high: high, sched: sched, sortOrder: row.DefaultSortOrder}, nil
 	}
 	scheduleSince, err := db.ParseTime(deref(row.ScheduleSince))
 	if err != nil {
@@ -170,7 +116,7 @@ func tankParameterOf(d *display, row dbgen.ListTankParametersRow, loc *time.Loca
 		UnitFamily: row.UnitFamily, Unit: string(m.unit), UnitLabel: m.label, Decimals: m.decimals,
 		Configured: st.configured, Enabled: st.enabled,
 		IdealLow: m.showPtr(st.low), IdealHigh: m.showPtr(st.high),
-		Schedule: scheduleOf(st.sched), SortOrder: st.sortOrder,
+		Schedule: st.sched.Columns(), SortOrder: st.sortOrder,
 	}
 	var lastDone *time.Time
 	if row.LatestResultID != nil {
@@ -195,15 +141,32 @@ func tankParameterOf(d *display, row dbgen.ListTankParametersRow, loc *time.Loca
 	return out, nil
 }
 
-// tankParameters lists the tank's parameters, or just one when parameterID is set, which then also finds an archived one.
-func (s *Service) tankParameters(ctx context.Context, q dbgen.DBTX, tankID int64, parameterID *int64) ([]TankParameter, string, error) {
+// tankParameterRows reads the tank's parameter rows in display order, leaving out archived definitions unless includeArchived is set.
+func tankParameterRows(ctx context.Context, q dbgen.DBTX, tankID int64, includeArchived bool) ([]dbgen.ListTankParametersRow, error) {
+	rows, err := db.Q(q).ListTankParameters(ctx, dbgen.ListTankParametersParams{TankID: tankID, IncludeArchived: db.Flag(includeArchived)})
+	if err != nil {
+		return nil, fmt.Errorf("list tank parameters: %w", err)
+	}
+	return rows, nil
+}
+
+// tankParameterRow reads one parameter's row in the tank, archived or not, or errNoParameter when there is no such definition.
+func tankParameterRow(ctx context.Context, q dbgen.DBTX, tankID, parameterID int64) (dbgen.ListTankParametersRow, error) {
+	rows, err := db.Q(q).ListTankParameters(ctx, dbgen.ListTankParametersParams{TankID: tankID, ParameterID: &parameterID, IncludeArchived: 1})
+	if err != nil {
+		return dbgen.ListTankParametersRow{}, fmt.Errorf("read tank parameter: %w", err)
+	}
+	if len(rows) == 0 {
+		return dbgen.ListTankParametersRow{}, errNoParameter
+	}
+	return rows[0], nil
+}
+
+// tankParameterItems builds the API items for rows and returns the name of the time zone their due times are judged in.
+func (s *Service) tankParameterItems(ctx context.Context, rows []dbgen.ListTankParametersRow) ([]TankParameter, string, error) {
 	loc, err := s.location(ctx)
 	if err != nil {
 		return nil, "", err
-	}
-	rows, err := db.Q(q).ListTankParameters(ctx, dbgen.ListTankParametersParams{TankID: tankID, ParameterID: parameterID, IncludeArchived: db.Flag(parameterID != nil)})
-	if err != nil {
-		return nil, "", fmt.Errorf("list tank parameters: %w", err)
 	}
 	d, now := s.newDisplay(ctx), s.now()
 	out := make([]TankParameter, 0, len(rows))
@@ -222,7 +185,11 @@ func (s *Service) ListTankParameters(ctx context.Context, tankID int64) (TankPar
 	if err := tanks.Require(ctx, s.r, tankID); err != nil {
 		return TankParameters{}, err
 	}
-	items, tz, err := s.tankParameters(ctx, s.r, tankID, nil)
+	rows, err := tankParameterRows(ctx, s.r, tankID, false)
+	if err != nil {
+		return TankParameters{}, err
+	}
+	items, tz, err := s.tankParameterItems(ctx, rows)
 	if err != nil {
 		return TankParameters{}, err
 	}
@@ -234,7 +201,7 @@ type SetTankParameterInput struct {
 	Enabled   *bool
 	IdealLow  httpx.Nullable[float64]
 	IdealHigh httpx.Nullable[float64]
-	Schedule  *Schedule
+	Schedule  *schedule.Columns
 	SortOrder *int
 }
 
@@ -244,15 +211,10 @@ func (s *Service) SetTankParameter(ctx context.Context, tankID, parameterID int6
 		if err := tanks.Require(ctx, tx, tankID); err != nil {
 			return err
 		}
-		q := db.Q(tx)
-		rows, err := q.ListTankParameters(ctx, dbgen.ListTankParametersParams{TankID: tankID, ParameterID: &parameterID, IncludeArchived: 1})
+		row, err := tankParameterRow(ctx, tx, tankID, parameterID)
 		if err != nil {
-			return fmt.Errorf("read tank parameter: %w", err)
+			return err
 		}
-		if len(rows) == 0 {
-			return errNoParameter
-		}
-		row := rows[0]
 		if row.ArchivedAt != nil {
 			return errParameterArchived
 		}
@@ -276,7 +238,7 @@ func (s *Service) SetTankParameter(ctx context.Context, tankID, parameterID int6
 		if in.Schedule != nil {
 			if in.Schedule.Kind == "" {
 				fields.Add("schedule.kind", httpx.CodeRequired)
-			} else if sched, err := schedule.Parse(in.Schedule.columns()); err != nil {
+			} else if sched, err := schedule.Parse(*in.Schedule); err != nil {
 				if !fields.AddFrom(err) {
 					return err
 				}
@@ -297,13 +259,13 @@ func (s *Service) SetTankParameter(ctx context.Context, tankID, parameterID int6
 
 		cols := cur.sched.Columns()
 		since := db.FormatTime(before.scheduleSince)
-		if !before.configured || (cur.enabled && !before.enabled) || !reflect.DeepEqual(before.sched.Columns(), cols) {
+		if !before.configured || (cur.enabled && !before.enabled) || !before.sched.Columns().Equal(cols) {
 			since = db.FormatTime(s.now())
 		}
-		if err := q.UpsertTankParameter(ctx, dbgen.UpsertTankParameterParams{
+		if err := db.Q(tx).UpsertTankParameter(ctx, dbgen.UpsertTankParameterParams{
 			TankID: tankID, ParameterID: parameterID, Enabled: db.Flag(cur.enabled), IdealLow: cur.low, IdealHigh: cur.high,
-			ScheduleKind: cols.Kind, IntervalDays: toInt64Ptr(cols.IntervalDays), Weekdays: toInt64Ptr(cols.Weekdays),
-			IntervalWeeks: int64(cols.IntervalWeeks), MonthDay: toInt64Ptr(cols.MonthDay), AnchorDate: cols.AnchorDate,
+			ScheduleKind: cols.Kind, IntervalDays: cols.IntervalDays, Weekdays: cols.Weekdays,
+			IntervalWeeks: cols.IntervalWeeks, MonthDay: cols.MonthDay, AnchorDate: cols.AnchorDate,
 			DueTime: cols.DueTime, SortOrder: cur.sortOrder, ScheduleSince: since, UpdatedAt: db.FormatTime(s.now()),
 		}); err != nil {
 			return fmt.Errorf("save tank parameter: %w", err)
@@ -313,12 +275,13 @@ func (s *Service) SetTankParameter(ctx context.Context, tankID, parameterID int6
 	if err != nil {
 		return TankParameter{}, err
 	}
-	items, _, err := s.tankParameters(ctx, s.r, tankID, &parameterID)
+	row, err := tankParameterRow(ctx, s.r, tankID, parameterID)
 	if err != nil {
 		return TankParameter{}, err
 	}
-	if len(items) != 1 {
-		return TankParameter{}, errors.New("saved tank parameter not found")
+	items, _, err := s.tankParameterItems(ctx, []dbgen.ListTankParametersRow{row})
+	if err != nil {
+		return TankParameter{}, err
 	}
 	return items[0], nil
 }

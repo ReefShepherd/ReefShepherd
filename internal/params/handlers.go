@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
+	"github.com/reefshepherd/reefshepherd/internal/schedule"
 	"github.com/reefshepherd/reefshepherd/internal/tanks"
 )
 
@@ -153,7 +154,7 @@ type putTankParameterRequest struct {
 	Enabled   *bool                   `json:"enabled"`
 	IdealLow  httpx.Nullable[float64] `json:"ideal_low"`
 	IdealHigh httpx.Nullable[float64] `json:"ideal_high"`
-	Schedule  *Schedule               `json:"schedule"`
+	Schedule  *schedule.Columns       `json:"schedule"`
 	SortOrder *int                    `json:"sort_order"`
 }
 

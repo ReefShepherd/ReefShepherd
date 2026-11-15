@@ -224,7 +224,11 @@ func TestLatestPerParameterIsOneStatement(t *testing.T) {
 	tiedLater := insert(ph, "2026-10-23T10:00:00Z", 8.2) // same time: the later row wins
 
 	counter := &countingDB{DBTX: e.svc.r}
-	items, _, err := e.svc.tankParameters(t.Context(), counter, tank, nil)
+	rows, err := tankParameterRows(t.Context(), counter, tank, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, _, err := e.svc.tankParameterItems(t.Context(), rows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +294,7 @@ func TestNeverTestedBaselineMovesOnlyWhenEnabledOrRescheduled(t *testing.T) {
 		t.Helper()
 		got := e.tankParams(tank).find(t, ph)
 		if !is(got.NextDue, wantDue) || got.Overdue != wantOverdue {
-			t.Errorf("%s: next_due = %v overdue = %v, want %s %v", step, got.NextDue, got.Overdue, wantDue, wantOverdue)
+			t.Errorf("%s: next_due = %q overdue = %v, want %s %v", step, deref(got.NextDue), got.Overdue, wantDue, wantOverdue)
 		}
 	}
 	check("after setup", "2026-10-25T09:00:00Z", true)
