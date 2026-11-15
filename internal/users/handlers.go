@@ -11,7 +11,7 @@ import (
 // PublicRoutes registers the endpoints that work before anyone is signed in.
 func PublicRoutes(mux *http.ServeMux, deps Deps) {
 	svc := NewService(deps)
-	mux.Handle("POST /api/v1/setup", httpx.Handle(svc.Logger, svc.setup, apiError))
+	mux.Handle("POST /api/v1/setup", httpx.Handle(svc.Logger, svc.setup, auth.APIError, apiError))
 }
 
 // Routes registers the user endpoints; the caller wraps mux in the sign-in check, and the user management routes also require an admin.

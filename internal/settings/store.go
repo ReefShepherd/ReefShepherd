@@ -69,16 +69,17 @@ func reject(field, code, format string, args ...any) error {
 // Store reads and writes the instance settings; a key that was never set reads as its default.
 type Store struct {
 	r, w dbgen.DBTX
+	now  func() time.Time
 }
 
 // NewStore returns a store on the given database.
 func NewStore(d *db.DB) *Store {
-	return &Store{r: d.R, w: d.W}
+	return &Store{r: d.R, w: d.W, now: time.Now}
 }
 
 // WithTx returns a store whose reads and writes all go through tx, so they commit or roll back together with the caller's other changes.
 func (s *Store) WithTx(tx *sql.Tx) *Store {
-	return &Store{r: tx, w: tx}
+	return &Store{r: tx, w: tx, now: s.now}
 }
 
 // GetSetupCompleted reports whether first-run setup has finished.
@@ -266,7 +267,7 @@ func (s *Store) get(ctx context.Context, key, fallback string) (string, error) {
 }
 
 func (s *Store) set(ctx context.Context, key, value string) error {
-	if err := db.Q(s.w).SetSetting(ctx, dbgen.SetSettingParams{Key: key, Value: value}); err != nil {
+	if err := db.Q(s.w).SetSetting(ctx, dbgen.SetSettingParams{Key: key, Value: value, UpdatedAt: db.FormatTime(s.now())}); err != nil {
 		return fmt.Errorf("write setting %s: %w", key, err)
 	}
 	return nil

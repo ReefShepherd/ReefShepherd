@@ -1,10 +1,14 @@
 package auth_test
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 
+	"github.com/reefshepherd/reefshepherd/internal/auth"
 	"github.com/reefshepherd/reefshepherd/internal/config"
+	"github.com/reefshepherd/reefshepherd/internal/httpx"
 	"github.com/reefshepherd/reefshepherd/internal/testutil"
 )
 
@@ -121,4 +125,28 @@ func TestPasswordModeIsTheDefault(t *testing.T) {
 	e := newEnv(t, config.Config{})
 	e.addUser("root", goodPassword, "admin")
 	e.client().whoami().expect(http.StatusUnauthorized, "unauthorized")
+}
+
+func TestModeLockedFollowsTheEnvironment(t *testing.T) {
+	for _, tc := range []struct {
+		env  string
+		want bool
+	}{{"", false}, {config.AuthModePassword, true}, {config.AuthModeDisabled, true}} {
+		if got := newEnv(t, config.Config{AuthMode: tc.env}).svc.ModeLocked(); got != tc.want {
+			t.Errorf("ModeLocked with %q = %v, want %v", tc.env, got, tc.want)
+		}
+	}
+}
+
+func TestAPIErrorGivesEnvLockedItsResponse(t *testing.T) {
+	var apiErr *httpx.APIError
+	err := auth.APIError(fmt.Errorf("switch: %w", auth.ErrEnvLocked))
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusConflict || apiErr.Code != "env_locked" ||
+		apiErr.Message != "the login mode is set by REEFSHEPHERD_AUTH_MODE on the server" || apiErr.Fields["auth_mode"] != "locked" || len(apiErr.Fields) != 1 {
+		t.Errorf("mapped = %#v", err)
+	}
+	other := errors.New("other")
+	if got := auth.APIError(other); !errors.Is(got, other) {
+		t.Errorf("an unrelated error was changed to %v", got)
+	}
 }

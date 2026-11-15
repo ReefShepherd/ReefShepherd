@@ -137,7 +137,7 @@ func (s *Service) Me(ctx context.Context, id int64) (Me, error) {
 }
 
 func (s *Service) instance(ctx context.Context) (Instance, error) {
-	v, err := s.Settings.Values(ctx)
+	v, err := s.Settings.GetValues(ctx)
 	if err != nil {
 		return Instance{}, err
 	}
@@ -145,11 +145,7 @@ func (s *Service) instance(ctx context.Context) (Instance, error) {
 	if err != nil {
 		return Instance{}, err
 	}
-	out := Instance{Name: v.InstanceName, Timezone: v.Timezone, Units: map[string]string{}, AuthMode: mode}
-	for family, unit := range v.Units {
-		out.Units[string(family)] = string(unit)
-	}
-	return out, nil
+	return Instance{Name: v.InstanceName, Timezone: v.Timezone, Units: settings.UnitsToStrings(v.Units), AuthMode: mode}, nil
 }
 
 // List returns every user.

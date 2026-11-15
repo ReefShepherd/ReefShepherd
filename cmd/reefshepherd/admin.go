@@ -133,7 +133,7 @@ func (e *adminEnv) setAuthMode(ctx context.Context, mode string, stdout, stderr 
 		return err
 	}
 	fmt.Fprintf(stdout, "Login mode set to %s.\n", mode)
-	if e.cfg.AuthMode != "" && e.cfg.AuthMode != mode {
+	if e.auth.ModeLocked() && e.cfg.AuthMode != mode {
 		fmt.Fprintf(stderr, "Note: %s is set to %s and takes precedence until it is removed.\n", config.EnvAuthMode, e.cfg.AuthMode)
 	}
 	return nil

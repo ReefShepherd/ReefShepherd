@@ -1,95 +1,35 @@
 package settings
 
 import (
-	"database/sql"
-	"log/slog"
 	"net/http"
 
 	"github.com/reefshepherd/reefshepherd/internal/auth"
-	"github.com/reefshepherd/reefshepherd/internal/config"
-	"github.com/reefshepherd/reefshepherd/internal/db"
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
 	"github.com/reefshepherd/reefshepherd/internal/units"
 )
 
-// CodeEnvLocked is the error code for a setting that the server's environment decides.
-const CodeEnvLocked = "env_locked"
-
-// AuthModeLocked is the 409 for changing the login mode while the server's environment decides it.
-func AuthModeLocked() *httpx.APIError {
-	fields := httpx.FieldErrors{}
-	fields.Add("auth_mode", httpx.CodeLocked)
-	e := httpx.Validation(fields)
-	e.Status, e.Code, e.Message = http.StatusConflict, CodeEnvLocked, "the login mode is set by "+config.EnvAuthMode+" on the server"
-	return e
-}
-
-// Deps are the dependencies the package's handlers need.
-type Deps struct {
-	DB       *db.DB
-	Settings *Store
-	Auth     *auth.Service
-	Logger   *slog.Logger
-}
-
 // PublicRoutes registers the endpoints that work without a session; the unit catalog holds nothing private and the setup wizard needs it before anyone signs in.
 func PublicRoutes(mux *http.ServeMux, deps Deps) {
-	h := &handlers{Deps: deps}
-	mux.Handle("GET /api/v1/units", httpx.Handle(deps.Logger, h.getUnits))
+	mux.Handle("GET /api/v1/units", httpx.Handle(deps.Logger, NewService(deps).getUnits))
 }
 
 // Routes registers the settings endpoints; the caller wraps mux in the sign-in check, and the settings routes also require an admin.
 func Routes(mux *http.ServeMux, deps Deps) {
-	h := &handlers{Deps: deps}
-	mux.Handle("GET /api/v1/settings", auth.RequireAdmin(httpx.Handle(deps.Logger, h.getSettings)))
-	mux.Handle("PATCH /api/v1/settings", auth.RequireAdmin(httpx.Handle(deps.Logger, h.patchSettings)))
+	svc := NewService(deps)
+	admin := func(h httpx.HandlerFunc) http.Handler {
+		return auth.RequireAdmin(httpx.Handle(deps.Logger, h, auth.APIError))
+	}
+	mux.Handle("GET /api/v1/settings", admin(svc.getSettings))
+	mux.Handle("PATCH /api/v1/settings", admin(svc.patchSettings))
 }
 
-type handlers struct {
-	Deps
-}
-
-func (h *handlers) getUnits(w http.ResponseWriter, _ *http.Request) error {
+func (s *Service) getUnits(w http.ResponseWriter, _ *http.Request) error {
 	httpx.WriteJSON(w, http.StatusOK, units.Catalog())
 	return nil
 }
 
-type settingsResponse struct {
-	InstanceName        string            `json:"instance_name"`
-	Timezone            string            `json:"timezone"`
-	ReminderDefaultTime string            `json:"reminder_default_time"`
-	Units               map[string]string `json:"units"`
-	// AuthMode is the mode in force, which an environment override may set.
-	AuthMode string `json:"auth_mode"`
-	// EnvLocked maps each setting the server environment decides to the variable that does.
-	EnvLocked map[string]string `json:"env_locked"`
-}
-
-func (h *handlers) snapshot(r *http.Request) (settingsResponse, error) {
-	ctx := r.Context()
-	v, err := h.Settings.Values(ctx)
-	if err != nil {
-		return settingsResponse{}, err
-	}
-	mode, err := h.Auth.EffectiveMode(ctx)
-	if err != nil {
-		return settingsResponse{}, err
-	}
-	out := settingsResponse{
-		InstanceName: v.InstanceName, Timezone: v.Timezone, ReminderDefaultTime: v.ReminderDefaultTime,
-		Units: map[string]string{}, AuthMode: mode, EnvLocked: map[string]string{},
-	}
-	for family, unit := range v.Units {
-		out.Units[string(family)] = string(unit)
-	}
-	if h.Auth.Config.AuthMode != "" {
-		out.EnvLocked["auth_mode"] = config.EnvAuthMode
-	}
-	return out, nil
-}
-
-func (h *handlers) getSettings(w http.ResponseWriter, r *http.Request) error {
-	out, err := h.snapshot(r)
+func (s *Service) getSettings(w http.ResponseWriter, r *http.Request) error {
+	out, err := s.Get(r.Context())
 	if err != nil {
 		return err
 	}
@@ -103,58 +43,19 @@ type patchSettingsRequest struct {
 	ReminderDefaultTime *string           `json:"reminder_default_time"`
 	Units               map[string]string `json:"units"`
 	AuthMode            *string           `json:"auth_mode"`
-	// Password is the admin's own password, required to turn login off.
-	Password string `json:"password"`
+	Password            string            `json:"password"`
 }
 
-func (h *handlers) patchSettings(w http.ResponseWriter, r *http.Request) error {
-	ctx := r.Context()
+func (s *Service) patchSettings(w http.ResponseWriter, r *http.Request) error {
 	var req patchSettingsRequest
 	if err := httpx.DecodeJSON(r, &req); err != nil {
 		return err
 	}
-	user, _ := httpx.CurrentUser(ctx)
-
-	changes := Changes{InstanceName: req.InstanceName, Timezone: req.Timezone, ReminderDefaultTime: req.ReminderDefaultTime, Units: map[units.Family]units.Unit{}}
-	for family, unit := range req.Units {
-		changes.Units[units.Family(family)] = units.Unit(unit)
-	}
-
-	newMode := ""
-	if req.AuthMode != nil {
-		effective, err := h.Auth.EffectiveMode(ctx)
-		if err != nil {
-			return err
-		}
-		if *req.AuthMode != effective {
-			if locked := h.Auth.Config.AuthMode; locked != "" {
-				return AuthModeLocked()
-			}
-			newMode = *req.AuthMode
-		}
-	}
-	if newMode == config.AuthModeDisabled {
-		// Turning login off hands the app to anyone who can reach it, so the admin has to prove who they are first.
-		if err := h.Auth.ConfirmPassword(ctx, r, user.ID, req.Password, "password"); err != nil {
-			return err
-		}
-	}
-
-	err := h.DB.InTx(ctx, func(tx *sql.Tx) error {
-		store := h.Settings.WithTx(tx)
-		rejected := httpx.FieldErrors{Message: "invalid settings"}
-		if err := store.Apply(ctx, changes); err != nil && !rejected.AddFrom(err) {
-			return err
-		}
-		if newMode != "" {
-			if err := store.SwitchAuthMode(ctx, newMode); err != nil && !rejected.AddFrom(err) {
-				return err
-			}
-		}
-		return rejected.Err()
-	})
+	user, _ := httpx.CurrentUser(r.Context())
+	out, err := s.Patch(r.Context(), r, user.ID, PatchInput(req))
 	if err != nil {
 		return err
 	}
-	return h.getSettings(w, r)
+	httpx.WriteJSON(w, http.StatusOK, out)
+	return nil
 }

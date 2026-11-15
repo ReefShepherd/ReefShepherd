@@ -435,7 +435,7 @@ func TestQBindsToPoolAndTransaction(t *testing.T) {
 	d := migrated(t)
 	ctx := t.Context()
 	err := d.InTx(ctx, func(tx *sql.Tx) error {
-		return Q(tx).SetSetting(ctx, dbgen.SetSettingParams{Key: "k", Value: "in tx"})
+		return Q(tx).SetSetting(ctx, dbgen.SetSettingParams{Key: "k", Value: "in tx", UpdatedAt: "2026-01-01T00:00:00Z"})
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -454,11 +454,11 @@ func TestSettingQueries(t *testing.T) {
 		t.Errorf("GetSetting(missing) err = %v, want sql.ErrNoRows", err)
 	}
 
-	if err := q.SetSetting(ctx, dbgen.SetSettingParams{Key: "timezone", Value: "UTC"}); err != nil {
+	if err := q.SetSetting(ctx, dbgen.SetSettingParams{Key: "timezone", Value: "UTC", UpdatedAt: "2026-01-01T00:00:00Z"}); err != nil {
 		t.Fatal(err)
 	}
 	exec(t, d.W, `UPDATE settings SET updated_at = '2000-01-01T00:00:00Z'`)
-	if err := q.SetSetting(ctx, dbgen.SetSettingParams{Key: "timezone", Value: "Europe/Berlin"}); err != nil {
+	if err := q.SetSetting(ctx, dbgen.SetSettingParams{Key: "timezone", Value: "Europe/Berlin", UpdatedAt: "2026-01-02T00:00:00Z"}); err != nil {
 		t.Fatal(err)
 	}
 	v, err := q.GetSetting(ctx, "timezone")
@@ -469,8 +469,8 @@ func TestSettingQueries(t *testing.T) {
 	if err := d.W.QueryRowContext(ctx, `SELECT updated_at FROM settings WHERE key = 'timezone'`).Scan(&updatedAt); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(updatedAt, time.Now().UTC().Format("2006-01-02")) || !strings.HasSuffix(updatedAt, "Z") {
-		t.Errorf("updated_at = %q, want today's UTC timestamp", updatedAt)
+	if updatedAt != "2026-01-02T00:00:00Z" {
+		t.Errorf("updated_at = %q, want the bound timestamp", updatedAt)
 	}
 
 	if n, err := q.DeleteSetting(ctx, "timezone"); err != nil || n != 1 {

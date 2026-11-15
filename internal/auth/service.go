@@ -67,9 +67,17 @@ func NewService(deps Deps) *Service {
 	return s
 }
 
+// ErrEnvLocked is returned for a change to the login mode while the server environment decides it.
+var ErrEnvLocked = errors.New("the login mode is set by " + config.EnvAuthMode + " on the server")
+
+// ModeLocked reports whether the server environment decides the login mode, so the stored setting cannot change it.
+func (s *Service) ModeLocked() bool {
+	return s.Config.AuthMode != ""
+}
+
 // EffectiveMode is the login mode in force: the environment override when set, else the stored setting.
 func (s *Service) EffectiveMode(ctx context.Context) (string, error) {
-	if s.Config.AuthMode != "" {
+	if s.ModeLocked() {
 		return s.Config.AuthMode, nil
 	}
 	mode, err := s.Settings.GetAuthMode(ctx)

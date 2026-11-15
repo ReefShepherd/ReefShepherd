@@ -185,6 +185,23 @@ func TestEnvironmentOverrideLocksTheLoginMode(t *testing.T) {
 	}
 }
 
+// envLockedBody is the exact response for changing a login mode the server environment decides.
+const envLockedBody = `{"error":{"code":"env_locked","message":"the login mode is set by REEFSHEPHERD_AUTH_MODE on the server","fields":{"auth_mode":"locked"}}}` + "\n"
+
+func TestEnvLockedResponseIsStable(t *testing.T) {
+	a := newAPITestApp(t, config.Config{AuthMode: config.AuthModePassword})
+	c := newClient(t, a)
+	c.setup(nil)
+	rec := c.do(http.MethodPatch, "/api/v1/settings", map[string]any{"auth_mode": "disabled", "password": adminPassword})
+	if rec.Code != http.StatusConflict || rec.Body.String() != envLockedBody {
+		t.Errorf("settings response = %d %q", rec.Code, rec.Body.String())
+	}
+	rec = newClient(t, newAPITestApp(t, config.Config{AuthMode: config.AuthModePassword})).do(http.MethodPost, "/api/v1/setup", map[string]any{"auth_mode": "disabled"})
+	if rec.Code != http.StatusConflict || rec.Body.String() != envLockedBody {
+		t.Errorf("setup response = %d %q", rec.Code, rec.Body.String())
+	}
+}
+
 func TestEnvironmentOverrideWinsOverTheStoredMode(t *testing.T) {
 	a := newAPITestApp(t, config.Config{AuthMode: config.AuthModeDisabled})
 	c := newClient(t, a)

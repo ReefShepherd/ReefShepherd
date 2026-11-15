@@ -26,7 +26,7 @@ func TestDisplayFamiliesExcludeFixed(t *testing.T) {
 
 func TestValuesFillsInDefaults(t *testing.T) {
 	s, _ := newStore(t)
-	v, err := s.Values(t.Context())
+	v, err := s.GetValues(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestApplyWritesNothingWhenAnyFieldIsInvalid(t *testing.T) {
 	if err := s.Apply(t.Context(), Changes{InstanceName: &name, Timezone: &tz, ReminderDefaultTime: &hhmm, Units: map[units.Family]units.Unit{units.Phosphate: units.PPB}}); err != nil {
 		t.Fatal(err)
 	}
-	v, _ := s.Values(t.Context())
+	v, _ := s.GetValues(t.Context())
 	if v.InstanceName != "Fine" || v.Timezone != tz || v.ReminderDefaultTime != hhmm || v.Units[units.Phosphate] != units.PPB {
 		t.Errorf("values = %+v", v)
 	}
@@ -171,5 +171,51 @@ func TestWithTxCommitsAndRollsBackTogether(t *testing.T) {
 	}
 	if got, _ := s.GetInstanceName(t.Context()); got != "Committed" {
 		t.Errorf("committed write = %q", got)
+	}
+}
+
+func TestUnitConvertersRoundTrip(t *testing.T) {
+	in := map[units.Family]units.Unit{units.Temperature: units.Fahrenheit, units.Salinity: units.PPT}
+	strs := UnitsToStrings(in)
+	if len(strs) != 2 || strs["temperature"] != "f" || strs["salinity"] != "ppt" {
+		t.Errorf("strings = %v", strs)
+	}
+	back := UnitsFromStrings(strs)
+	if len(back) != 2 || back[units.Temperature] != units.Fahrenheit || back[units.Salinity] != units.PPT {
+		t.Errorf("round trip = %v", back)
+	}
+	if got := UnitsFromStrings(nil); got == nil || len(got) != 0 {
+		t.Errorf("nil input = %v, want an empty map", got)
+	}
+	if got := UnitsToStrings(nil); got == nil || len(got) != 0 {
+		t.Errorf("nil input = %v, want an empty map", got)
+	}
+	// Unknown names pass through for the validation to refuse.
+	if got := UnitsFromStrings(map[string]string{"mystery": "x"}); got["mystery"] != "x" {
+		t.Errorf("unknown family = %v", got)
+	}
+}
+
+func TestUpdateReportsEveryRejectedFieldTogether(t *testing.T) {
+	s, d := newStore(t)
+	ctx := t.Context()
+	bad := "Mars/Base"
+	name := "New Name"
+	err := s.Update(ctx, Changes{Timezone: &bad, InstanceName: &name}, config.AuthModeDisabled, "invalid x")
+	var fields httpx.FieldErrors
+	if !fields.AddFrom(err) || fields.Message != "invalid x" {
+		t.Fatalf("err = %v, want field errors with the summary", err)
+	}
+	if got := fieldCodes(err); len(got) != 2 || got["timezone"] != "invalid" || got["auth_mode"] != "invalid" {
+		t.Errorf("codes = %v, want timezone and auth_mode (there is no admin to act as)", got)
+	}
+	if _, ok := storedValue(t, d, "instance_name"); ok {
+		t.Error("a rejected update wrote the valid field")
+	}
+	if err := s.Update(ctx, Changes{InstanceName: &name}, "", "unused"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetInstanceName(ctx); got != name {
+		t.Errorf("instance name = %q", got)
 	}
 }

@@ -1,8 +1,10 @@
 package settings
 
 import (
+	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/reefshepherd/reefshepherd/internal/db"
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
@@ -220,5 +222,38 @@ func TestCorruptStoredValuesAreReported(t *testing.T) {
 	}
 	if _, err := s.GetSetupCompleted(ctx); err == nil {
 		t.Error("an empty setup_completed was treated as unset")
+	}
+}
+
+func storedUpdatedAt(t *testing.T, d *db.DB, key string) string {
+	t.Helper()
+	var at string
+	if err := d.R.QueryRowContext(t.Context(), `SELECT updated_at FROM settings WHERE key = ?`, key).Scan(&at); err != nil {
+		t.Fatal(err)
+	}
+	return at
+}
+
+func TestSettingsRecordTheClockAsTheirUpdateTime(t *testing.T) {
+	s, d := newStore(t)
+	ctx := t.Context()
+	first := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	s.now = func() time.Time { return first }
+
+	if err := s.SetInstanceName(ctx, "One"); err != nil {
+		t.Fatal(err)
+	}
+	if got := storedUpdatedAt(t, d, "instance_name"); got != "2026-03-04T05:06:07Z" {
+		t.Errorf("updated_at after insert = %q, want the clock", got)
+	}
+
+	// An overwrite moves the time, and so does a write through a transaction's store.
+	s.now = func() time.Time { return first.Add(48 * time.Hour) }
+	err := d.InTx(ctx, func(tx *sql.Tx) error { return s.WithTx(tx).SetInstanceName(ctx, "Two") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := storedUpdatedAt(t, d, "instance_name"); got != "2026-03-06T05:06:07Z" {
+		t.Errorf("updated_at after overwrite = %q, want the later clock", got)
 	}
 }

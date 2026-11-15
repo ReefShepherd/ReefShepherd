@@ -35,6 +35,18 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.Handle("DELETE /api/v1/me/sessions/{id}", handle(s.revokeSession))
 }
 
+// APIError gives the refusals this package's services return their HTTP form, for handlers elsewhere to chain before their own mapper.
+func APIError(err error) error {
+	if !errors.Is(err, ErrEnvLocked) {
+		return err
+	}
+	fields := httpx.FieldErrors{}
+	fields.Add("auth_mode", httpx.CodeLocked)
+	e := httpx.Validation(fields)
+	e.Status, e.Code, e.Message = http.StatusConflict, "env_locked", ErrEnvLocked.Error()
+	return e
+}
+
 type configResponse struct {
 	Mode          string   `json:"mode"`
 	SetupRequired bool     `json:"setup_required"`
@@ -63,7 +75,7 @@ func (s *Service) getConfig(w http.ResponseWriter, r *http.Request) error {
 	if mode == config.AuthModePassword {
 		methods = append(methods, MethodPassword)
 	}
-	httpx.WriteJSON(w, http.StatusOK, configResponse{Mode: mode, SetupRequired: setup, Methods: methods, InstanceName: name, Version: version.Version(), ModeLocked: s.Config.AuthMode != ""})
+	httpx.WriteJSON(w, http.StatusOK, configResponse{Mode: mode, SetupRequired: setup, Methods: methods, InstanceName: name, Version: version.Version(), ModeLocked: s.ModeLocked()})
 	return nil
 }
 
