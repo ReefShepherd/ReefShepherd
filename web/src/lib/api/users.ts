@@ -67,7 +67,7 @@ export function createUsersApi(api: Api) {
       changes: { theme?: string; display_name?: string; email?: string | null },
       signal?: AbortSignal
     ) => api.patch<Me>('/me', changes, { signal }),
-    list: (signal?: AbortSignal) => api.get<User[]>('/users', { signal }),
+    list: (signal?: AbortSignal) => api.list<User>('/users', { signal }),
     create: (user: NewUser, signal?: AbortSignal) => api.post<User>('/users', user, { signal }),
     update: (id: number, changes: UserChanges, signal?: AbortSignal) =>
       api.patch<User>(`/users/${id}`, changes, { signal }),

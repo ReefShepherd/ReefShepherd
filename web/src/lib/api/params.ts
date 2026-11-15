@@ -1,5 +1,5 @@
 import type { Schedule } from '#lib/schedule/schedule.js';
-import { api as defaultApi, type Api } from './client.js';
+import { api as defaultApi, type Api, type Page } from './client.js';
 import { tankPath } from './tank-id.js';
 
 export interface ParameterDefinition {
@@ -103,10 +103,7 @@ export interface NewResults {
   results: NewResultEntry[];
 }
 
-export interface ResultPage {
-  results: TestResult[];
-  next_cursor: string | null;
-}
+export type ResultPage = Page<TestResult>;
 
 export interface ResultQuery {
   parameter_id?: number;
@@ -123,11 +120,10 @@ export interface ResultChanges {
 export function createParamsApi(api: Api) {
   return {
     definitions: (includeArchived = false, signal?: AbortSignal) =>
-      api
-        .get<{
-          parameters: ParameterDefinition[];
-        }>('/parameters', { signal, query: { include_archived: includeArchived || undefined } })
-        .then((r) => r.parameters),
+      api.list<ParameterDefinition>('/parameters', {
+        signal,
+        query: { include_archived: includeArchived || undefined }
+      }),
     createDefinition: (parameter: NewParameter, signal?: AbortSignal) =>
       api.post<ParameterDefinition>('/parameters', parameter, { signal }),
     updateDefinition: (id: number, changes: ParameterChanges, signal?: AbortSignal) =>
@@ -149,11 +145,9 @@ export function createParamsApi(api: Api) {
     ) => api.put<TankParameter>(tankPath(tankId, 'parameters', parameterId), changes, { signal }),
 
     createResults: (tankId: number, entry: NewResults, signal?: AbortSignal) =>
-      api
-        .post<{ results: TestResult[] }>(tankPath(tankId, 'results'), entry, { signal })
-        .then((r) => r.results),
+      api.postList<TestResult>(tankPath(tankId, 'results'), entry, { signal }),
     results: (tankId: number, query: ResultQuery = {}, signal?: AbortSignal) =>
-      api.get<ResultPage>(tankPath(tankId, 'results'), { signal, query: { ...query } }),
+      api.listPage<TestResult>(tankPath(tankId, 'results'), { signal, query: { ...query } }),
     updateResult: (id: number, changes: ResultChanges, signal?: AbortSignal) =>
       api.patch<TestResult>(`/results/${id}`, changes, { signal }),
     removeResult: (id: number, signal?: AbortSignal) =>

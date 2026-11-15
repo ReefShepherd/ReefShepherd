@@ -81,15 +81,14 @@ func TestUnitsCatalog(t *testing.T) {
 	for _, c := range []*apiClient{admin, signedInAs(t, a, "mia")} {
 		rec := c.do(http.MethodGet, "/api/v1/units", nil)
 		testutil.ExpectStatus(t, rec, http.StatusOK)
-		var catalog []struct {
+		catalog := testutil.DecodeItems[struct {
 			Family    string `json:"family"`
 			Canonical string `json:"canonical"`
 			Units     []struct {
 				Unit  string `json:"unit"`
 				Label string `json:"label"`
 			} `json:"units"`
-		}
-		testutil.DecodeInto(t, rec, &catalog)
+		}](t, rec)
 		if len(catalog) < 5 || catalog[0].Family != "temperature" || catalog[0].Canonical != "c" || len(catalog[0].Units) != 2 || catalog[0].Units[1].Label != "°F" {
 			t.Errorf("catalog = %+v", catalog)
 		}

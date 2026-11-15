@@ -43,7 +43,7 @@ func TestCreateGetListAndUpdate(t *testing.T) {
 
 	rec = e.do(asMember, http.MethodGet, "/api/v1/tanks", nil)
 	testutil.ExpectStatus(e.t, rec, http.StatusOK)
-	list := testutil.Decode[[]Tank](t, rec)
+	list := testutil.DecodeItems[Tank](t, rec)
 	if len(list) != 2 || list[0].ID != a.ID || list[1].ID != b.ID {
 		t.Errorf("list = %+v", list)
 	}
@@ -55,7 +55,7 @@ func TestCreateGetListAndUpdate(t *testing.T) {
 	if got.Name != "Frag rack" || got.SortOrder != -1 || got.TankType != "frag" || *got.Volume != 80.5 || *got.StartedOn != "2025-03-04" || got.Note != "Hang-on frag rack" {
 		t.Errorf("patched = %+v", got)
 	}
-	list = testutil.Decode[[]Tank](t, e.do(asMember, http.MethodGet, "/api/v1/tanks", nil))
+	list = testutil.DecodeItems[Tank](t, e.do(asMember, http.MethodGet, "/api/v1/tanks", nil))
 	if list[0].ID != b.ID || list[1].ID != a.ID {
 		t.Errorf("sort_order did not reorder the list: %+v", list)
 	}
@@ -388,15 +388,15 @@ func TestArchiveAndUnarchive(t *testing.T) {
 		t.Fatalf("archived = %+v", archived)
 	}
 
-	list := testutil.Decode[[]Tank](t, e.do(asMember, http.MethodGet, "/api/v1/tanks", nil))
+	list := testutil.DecodeItems[Tank](t, e.do(asMember, http.MethodGet, "/api/v1/tanks", nil))
 	if len(list) != 1 || list[0].ID != b.ID {
 		t.Errorf("default list = %+v, want only B", list)
 	}
-	list = testutil.Decode[[]Tank](t, e.do(asMember, http.MethodGet, "/api/v1/tanks?include_archived=true", nil))
+	list = testutil.DecodeItems[Tank](t, e.do(asMember, http.MethodGet, "/api/v1/tanks?include_archived=true", nil))
 	if len(list) != 2 || list[0].ID != b.ID || list[1].ID != a.ID || list[1].ArchivedAt == nil {
 		t.Errorf("list with archived = %+v, want B then archived A", list)
 	}
-	list = testutil.Decode[[]Tank](t, e.do(asMember, http.MethodGet, "/api/v1/tanks?include_archived=false", nil))
+	list = testutil.DecodeItems[Tank](t, e.do(asMember, http.MethodGet, "/api/v1/tanks?include_archived=false", nil))
 	if len(list) != 1 {
 		t.Errorf("include_archived=false listed %d tanks", len(list))
 	}
@@ -416,7 +416,7 @@ func TestArchiveAndUnarchive(t *testing.T) {
 	if back := testutil.Decode[Tank](t, rec); back.ArchivedAt != nil {
 		t.Errorf("unarchived = %+v", back)
 	}
-	if list = testutil.Decode[[]Tank](t, e.do(asMember, http.MethodGet, "/api/v1/tanks", nil)); len(list) != 2 {
+	if list = testutil.DecodeItems[Tank](t, e.do(asMember, http.MethodGet, "/api/v1/tanks", nil)); len(list) != 2 {
 		t.Errorf("list after unarchive = %+v", list)
 	}
 	// Unarchiving an active tank is fine.
@@ -465,7 +465,7 @@ func TestDeleteNeedsTheTankNameAndCascades(t *testing.T) {
 	}
 	testutil.ExpectError(e.t, e.admin(http.MethodGet, path(tank.ID, ""), nil), http.StatusNotFound, "not_found")
 	testutil.ExpectError(e.t, del(asAdmin, tank.ID, "?confirm="+url.QueryEscape(name)), http.StatusNotFound, "not_found")
-	if list := testutil.Decode[[]Tank](t, e.admin(http.MethodGet, "/api/v1/tanks", nil)); len(list) != 1 || list[0].ID != keep.ID {
+	if list := testutil.DecodeItems[Tank](t, e.admin(http.MethodGet, "/api/v1/tanks", nil)); len(list) != 1 || list[0].ID != keep.ID {
 		t.Errorf("list after delete = %+v", list)
 	}
 }

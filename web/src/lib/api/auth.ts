@@ -63,7 +63,7 @@ export function createAuthApi(api: Api) {
     disableTotp: (proof?: TotpProof, signal?: AbortSignal) =>
       api.del<void>('/me/totp', proof, { signal }),
 
-    sessions: (signal?: AbortSignal) => api.get<Session[]>('/me/sessions', { signal }),
+    sessions: (signal?: AbortSignal) => api.list<Session>('/me/sessions', { signal }),
     revokeSession: (id: number, signal?: AbortSignal) =>
       api.del<void>(`/me/sessions/${id}`, undefined, { signal })
   };

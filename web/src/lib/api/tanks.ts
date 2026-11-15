@@ -43,7 +43,7 @@ export interface TankChanges {
 export function createTanksApi(api: Api) {
   return {
     list: (includeArchived = false, signal?: AbortSignal) =>
-      api.get<Tank[]>('/tanks', {
+      api.list<Tank>('/tanks', {
         signal,
         query: { include_archived: includeArchived || undefined }
       }),

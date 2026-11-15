@@ -392,7 +392,7 @@ func (s *Service) listSessions(w http.ResponseWriter, r *http.Request) error {
 			CreatedAt: row.CreatedAt, LastSeenAt: row.LastSeenAt, ExpiresAt: row.ExpiresAt, Current: row.ID == current,
 		}
 	}
-	httpx.WriteJSON(w, http.StatusOK, out)
+	httpx.List(w, http.StatusOK, out)
 	return nil
 }
 

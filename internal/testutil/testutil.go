@@ -110,6 +110,18 @@ func DecodeInto(t testing.TB, rec *httptest.ResponseRecorder, v any) {
 	}
 }
 
+// DecodeItems returns the items of a list response and fails the test when the body has no items array.
+func DecodeItems[T any](t testing.TB, rec *httptest.ResponseRecorder) []T {
+	t.Helper()
+	body := Decode[struct {
+		Items []T `json:"items"`
+	}](t, rec)
+	if body.Items == nil {
+		t.Fatalf("body %q has no items array", rec.Body.String())
+	}
+	return body.Items
+}
+
 // Decode unmarshals the response body into a T.
 func Decode[T any](t testing.TB, rec *httptest.ResponseRecorder) T {
 	t.Helper()

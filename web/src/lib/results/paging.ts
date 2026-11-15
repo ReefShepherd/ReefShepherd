@@ -23,7 +23,7 @@ function newestFirst(a: TestResult, b: TestResult): number {
 /** Adds a fetched page after the rows already shown, skipping any row that is already there. */
 export function appendPage(shown: readonly TestResult[], page: ResultPage): TestResult[] {
   const known = new Set(shown.map((r) => r.id));
-  return [...shown, ...page.results.filter((r) => !known.has(r.id))];
+  return [...shown, ...page.items.filter((r) => !known.has(r.id))];
 }
 
 /** Puts a saved result in place of its old copy and restores the newest-first order, since its time may have changed. */

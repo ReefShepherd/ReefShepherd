@@ -11,11 +11,26 @@ import { createUsersApi } from './users.js';
 // Every call of every module hands the caller's abort signal to the client.
 describe('abort signals', () => {
   const signal = new AbortController().signal;
-  const ok = { parameters: [], results: [], cards: [] };
+  // Each route answers with the shape the server really sends for it.
+  const replyFor = (key: string): unknown => {
+    if (/^GET \/tanks\/\d+\/results$/.test(key)) return { items: [], next_cursor: null };
+    if (/^GET \/tanks\/\d+\/parameters$/.test(key))
+      return { tank_id: 1, timezone: 'UTC', parameters: [] };
+    if (/\/dashboard/.test(key)) return { cards: [] };
+    if (/\/series$/.test(key)) return { points: [] };
+    if (
+      /^(GET \/(tanks|users|units|parameters|me\/sessions)|POST \/tanks\/\d+\/results)$/.test(key)
+    )
+      return { items: [] };
+    return {};
+  };
 
   it('reach the client from every module call', async () => {
     const { api, calls } = fakeApi(
-      new Proxy({}, { has: () => true, get: () => ok }) as Record<string, unknown>
+      new Proxy({}, { has: () => true, get: (_, key) => replyFor(String(key)) }) as Record<
+        string,
+        unknown
+      >
     );
     const auth = createAuthApi(api);
     const users = createUsersApi(api);

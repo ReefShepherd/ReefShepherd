@@ -24,11 +24,7 @@ func (e *env) customParameter(body map[string]any) int64 {
 
 func (e *env) definitions(query string) []Definition {
 	e.t.Helper()
-	var out struct {
-		Parameters []Definition `json:"parameters"`
-	}
-	e.must(http.StatusOK, http.MethodGet, "/api/v1/parameters"+query, nil).decode(&out)
-	return out.Parameters
+	return testutil.DecodeItems[Definition](e.t, e.must(http.StatusOK, http.MethodGet, "/api/v1/parameters"+query, nil).ResponseRecorder)
 }
 
 func TestListShipsThePresetsInOrderWithDisplayDefaults(t *testing.T) {
@@ -217,8 +213,8 @@ func TestArchiveHidesAParameterWithoutLosingItsResults(t *testing.T) {
 	}
 	var page ResultPage
 	e.must(http.StatusOK, http.MethodGet, tankPath(tank, "/results"), nil).decode(&page)
-	if len(page.Results) != 1 || page.Results[0].ParameterName != "Iodine" {
-		t.Errorf("results = %+v", page.Results)
+	if len(page.Items) != 1 || page.Items[0].ParameterName != "Iodine" {
+		t.Errorf("results = %+v", page.Items)
 	}
 
 	e.must(http.StatusOK, http.MethodPost, paramPath(id, "/unarchive"), nil).decode(&def)
@@ -260,6 +256,6 @@ func TestDeleteOnlyWithoutResults(t *testing.T) {
 	// Once its results are gone the parameter can be deleted.
 	var page ResultPage
 	e.must(http.StatusOK, http.MethodGet, tankPath(tank, "/results"), nil).decode(&page)
-	e.must(http.StatusNoContent, http.MethodDelete, "/api/v1/results/"+strconv.FormatInt(page.Results[0].ID, 10), nil)
+	e.must(http.StatusNoContent, http.MethodDelete, "/api/v1/results/"+strconv.FormatInt(page.Items[0].ID, 10), nil)
 	e.must(http.StatusNoContent, http.MethodDelete, paramPath(used, ""), nil)
 }

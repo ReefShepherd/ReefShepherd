@@ -163,8 +163,7 @@ func TestAdminCreatesAndListsUsers(t *testing.T) {
 	}
 	signedInAs(t, a, "mia") // usernames are case-insensitive
 
-	var list []meBody
-	testutil.DecodeInto(t, admin.do(http.MethodGet, "/api/v1/users", nil), &list)
+	list := testutil.DecodeItems[meBody](t, admin.do(http.MethodGet, "/api/v1/users", nil))
 	if len(list) != 2 || list[0].Username != adminName || list[1].Username != "Mia" {
 		t.Errorf("list = %+v", list)
 	}
@@ -353,8 +352,7 @@ func TestUsersAPIListsTwoStepStatus(t *testing.T) {
 	a, admin := adminAndApp(t)
 	addUser(t, admin, "mia", "member")
 	signedInAs(t, a, "mia").enableTOTP()
-	var list []meBody
-	testutil.DecodeInto(t, admin.do(http.MethodGet, "/api/v1/users", nil), &list)
+	list := testutil.DecodeItems[meBody](t, admin.do(http.MethodGet, "/api/v1/users", nil))
 	if len(list) != 2 || list[0].TOTPEnabled || !list[1].TOTPEnabled {
 		t.Errorf("list = %+v", list)
 	}

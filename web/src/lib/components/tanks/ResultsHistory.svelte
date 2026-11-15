@@ -44,7 +44,7 @@
     try {
       const page = await paramsApi.results(tankId, resultQuery(id, null));
       if (mine !== generation) return;
-      results = page.results;
+      results = page.items;
       nextCursor = page.next_cursor;
     } catch (e) {
       if (mine !== generation) return;

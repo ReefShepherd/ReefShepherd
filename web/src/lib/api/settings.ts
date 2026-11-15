@@ -37,7 +37,7 @@ export function createSettingsApi(api: Api) {
     get: (signal?: AbortSignal) => api.get<InstanceSettings>('/settings', { signal }),
     update: (patch: SettingsPatch, signal?: AbortSignal) =>
       api.patch<InstanceSettings>('/settings', patch, { signal }),
-    units: (signal?: AbortSignal) => api.get<UnitFamily[]>('/units', { signal })
+    units: (signal?: AbortSignal) => api.list<UnitFamily>('/units', { signal })
   };
 }
 

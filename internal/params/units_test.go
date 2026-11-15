@@ -26,8 +26,8 @@ func TestFahrenheitEntryIsStoredAsCelsiusAndReturnedAsFahrenheit(t *testing.T) {
 
 	var page ResultPage
 	e.must(http.StatusOK, http.MethodGet, tankPath(tank, "/results"), nil).decode(&page)
-	if len(page.Results) != 1 || page.Results[0].Value != 77 || page.Results[0].Unit != "f" {
-		t.Errorf("listed = %+v", page.Results)
+	if len(page.Items) != 1 || page.Items[0].Value != 77 || page.Items[0].Unit != "f" {
+		t.Errorf("listed = %+v", page.Items)
 	}
 	var series Series
 	e.must(http.StatusOK, http.MethodGet, tpPath(tank, temp, "/series"), nil).decode(&series)
@@ -58,7 +58,7 @@ func TestSwitchingUnitsChangesOutputButNotStoredRows(t *testing.T) {
 	var page ResultPage
 	e.must(http.StatusOK, http.MethodGet, tankPath(tank, "/results"), nil).decode(&page)
 	byParam := map[int64]ResultView{}
-	for _, r := range page.Results {
+	for _, r := range page.Items {
 		byParam[r.ParameterID] = r
 	}
 	if r := byParam[temp]; r.Value != 25 || r.Unit != "c" || r.UnitLabel != "°C" {
@@ -94,7 +94,7 @@ func TestSalinityIsShownAsSGByDefault(t *testing.T) {
 	e.setUnit(units.Salinity, units.PPT)
 	var page ResultPage
 	e.must(http.StatusOK, http.MethodGet, tankPath(tank, "/results"), nil).decode(&page)
-	if got := page.Results[0]; got.Unit != "ppt" || got.Value != units.Round(wantPPT, 1) {
+	if got := page.Items[0]; got.Unit != "ppt" || got.Value != units.Round(wantPPT, 1) {
 		t.Errorf("in ppt = %+v", got)
 	}
 }

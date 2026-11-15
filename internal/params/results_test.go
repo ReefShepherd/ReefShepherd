@@ -22,7 +22,7 @@ func TestMultiParameterEntryStoresEveryReadingAtOneTime(t *testing.T) {
 	temp, ph, alk := e.preset("temperature"), e.preset("ph"), e.preset("alkalinity")
 
 	var out struct {
-		Results []ResultView `json:"results"`
+		Items []ResultView `json:"items"`
 	}
 	e.must(http.StatusCreated, http.MethodPost, tankPath(tank, "/results"), map[string]any{
 		"measured_at": "2026-10-24T08:30:00-04:00",
@@ -32,8 +32,8 @@ func TestMultiParameterEntryStoresEveryReadingAtOneTime(t *testing.T) {
 			{"parameter_id": alk, "value": 8.4},
 		},
 	}).decode(&out)
-	if len(out.Results) != 3 {
-		t.Fatalf("results = %+v", out.Results)
+	if len(out.Items) != 3 {
+		t.Fatalf("results = %+v", out.Items)
 	}
 	for i, want := range []struct {
 		pid   int64
@@ -41,15 +41,15 @@ func TestMultiParameterEntryStoresEveryReadingAtOneTime(t *testing.T) {
 		value float64
 		note  string
 	}{{temp, "Temperature", 25.2, ""}, {ph, "pH", 8.1, "after water change"}, {alk, "Alkalinity", 8.4, ""}} {
-		r := out.Results[i]
+		r := out.Items[i]
 		if r.ID == 0 || r.TankID != tank || r.ParameterID != want.pid || r.ParameterName != want.name || r.Value != want.value || r.Note != want.note ||
 			r.MeasuredAt != "2026-10-24T12:30:00Z" || r.Source != "manual" || r.CreatedBy == nil || *r.CreatedBy != e.userID ||
 			r.CreatedAt != "2026-10-24T12:00:00Z" || r.UpdatedAt != r.CreatedAt || !r.InRange {
 			t.Errorf("result %d = %+v", i, r)
 		}
 	}
-	if out.Results[0].ID >= out.Results[1].ID || out.Results[1].ID >= out.Results[2].ID {
-		t.Errorf("ids = %d, %d, %d", out.Results[0].ID, out.Results[1].ID, out.Results[2].ID)
+	if out.Items[0].ID >= out.Items[1].ID || out.Items[1].ID >= out.Items[2].ID {
+		t.Errorf("ids = %d, %d, %d", out.Items[0].ID, out.Items[1].ID, out.Items[2].ID)
 	}
 	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM test_results WHERE measured_at = '2026-10-24T12:30:00Z'`); n != 3 {
 		t.Errorf("%d rows at the shared time, want 3", n)
@@ -268,10 +268,10 @@ func TestResultListPagesNewestFirstWithACursor(t *testing.T) {
 			var page ResultPage
 			e.must(http.StatusOK, http.MethodGet, tankPath(tank, "/results"+q), nil).decode(&page)
 			pages++
-			if len(page.Results) > limit {
-				t.Fatalf("limit %d returned %d results", limit, len(page.Results))
+			if len(page.Items) > limit {
+				t.Fatalf("limit %d returned %d results", limit, len(page.Items))
 			}
-			for _, r := range page.Results {
+			for _, r := range page.Items {
 				got = append(got, r.ID)
 			}
 			if page.NextCursor == nil {
@@ -294,8 +294,8 @@ func TestResultListPagesNewestFirstWithACursor(t *testing.T) {
 	// The default page size holds everything here and leaves no cursor.
 	var page ResultPage
 	e.must(http.StatusOK, http.MethodGet, tankPath(tank, "/results"), nil).decode(&page)
-	if len(page.Results) != 7 || page.NextCursor != nil || page.Results[0].MeasuredAt != "2026-10-22T10:00:00Z" || page.Results[6].MeasuredAt != "2026-10-18T10:00:00Z" {
-		t.Errorf("default page = %d results, cursor %v", len(page.Results), page.NextCursor)
+	if len(page.Items) != 7 || page.NextCursor != nil || page.Items[0].MeasuredAt != "2026-10-22T10:00:00Z" || page.Items[6].MeasuredAt != "2026-10-18T10:00:00Z" {
+		t.Errorf("default page = %d results, cursor %v", len(page.Items), page.NextCursor)
 	}
 }
 
@@ -309,7 +309,7 @@ func TestResultListFilters(t *testing.T) {
 		t.Helper()
 		var page ResultPage
 		e.must(http.StatusOK, http.MethodGet, tankPath(tank, "/results?"+query), nil).decode(&page)
-		return len(page.Results)
+		return len(page.Items)
 	}
 	if n := count("parameter_id=" + strconv.FormatInt(ph, 10)); n != 5 {
 		t.Errorf("parameter filter: %d, want 5", n)
@@ -413,8 +413,8 @@ func TestDeleteResult(t *testing.T) {
 	e.must(http.StatusNoContent, http.MethodDelete, resultPath(first.ID), nil)
 	var page ResultPage
 	e.must(http.StatusOK, http.MethodGet, tankPath(tank, "/results"), nil).decode(&page)
-	if len(page.Results) != 1 || page.Results[0].ID != second.ID {
-		t.Errorf("remaining = %+v", page.Results)
+	if len(page.Items) != 1 || page.Items[0].ID != second.ID {
+		t.Errorf("remaining = %+v", page.Items)
 	}
 	e.fail(http.StatusNotFound, "not_found", http.MethodDelete, resultPath(first.ID), nil)
 	e.fail(http.StatusNotFound, "not_found", http.MethodDelete, "/api/v1/results/0", nil)

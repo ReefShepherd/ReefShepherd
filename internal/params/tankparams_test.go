@@ -186,7 +186,7 @@ func TestStatusUsesTheTanksCurrentRange(t *testing.T) {
 	}
 	var page ResultPage
 	e.must(http.StatusOK, http.MethodGet, tankPath(tank, "/results"), nil).decode(&page)
-	if page.Results[0].InRange {
+	if page.Items[0].InRange {
 		t.Error("the listed result still counts as in range")
 	}
 	var series Series

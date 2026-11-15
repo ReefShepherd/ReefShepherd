@@ -150,9 +150,8 @@ func TestSessionListShowsOnlyActiveOwnSessions(t *testing.T) {
 		ExpiresAt  string `json:"expires_at"`
 		Current    bool   `json:"current"`
 	}
-	var list []item
 	r := a1.do(http.MethodGet, "/api/v1/me/sessions", nil)
-	r.decode(&list)
+	list := testutil.DecodeItems[item](t, r.ResponseRecorder)
 	if r.Code != 200 || len(list) != 2 {
 		t.Fatalf("list: %d %s", r.Code, r.Body)
 	}
@@ -182,10 +181,9 @@ func TestExpiredSessionsAreNotListed(t *testing.T) {
 	// A second row that has run out while its user is still around.
 	testutil.Exec(e.t, e.db, `INSERT INTO sessions (token_hash, user_id, stage, auth_method, expires_at) VALUES (x'01', ?, 'active', 'password', ?)`,
 		id, e.now.Add(-time.Minute).Format("2006-01-02T15:04:05Z"))
-	var list []struct {
+	list := testutil.DecodeItems[struct {
 		ID int64 `json:"id"`
-	}
-	c.do(http.MethodGet, "/api/v1/me/sessions", nil).decode(&list)
+	}](t, c.do(http.MethodGet, "/api/v1/me/sessions", nil).ResponseRecorder)
 	if len(list) != 1 {
 		t.Errorf("listed %d sessions, want 1", len(list))
 	}
@@ -194,10 +192,9 @@ func TestExpiredSessionsAreNotListed(t *testing.T) {
 func TestPendingSessionsAreNotListed(t *testing.T) {
 	e, c, _, _ := signedInWithTOTP(t)
 	loginStep1(t, e)
-	var list []struct {
+	list := testutil.DecodeItems[struct {
 		ID int64 `json:"id"`
-	}
-	c.do(http.MethodGet, "/api/v1/me/sessions", nil).decode(&list)
+	}](t, c.do(http.MethodGet, "/api/v1/me/sessions", nil).ResponseRecorder)
 	if len(list) != 1 {
 		t.Errorf("listed %d sessions, want only the active one", len(list))
 	}

@@ -55,10 +55,9 @@ func TestMembersShareTanksButCannotDeleteThem(t *testing.T) {
 	testutil.DecodeInto(t, rec, &tank)
 
 	// Every signed-in user sees and edits every tank.
-	var seen []tankBody
 	rec = admin.do(http.MethodGet, "/api/v1/tanks", nil)
 	testutil.ExpectStatus(t, rec, http.StatusOK)
-	testutil.DecodeInto(t, rec, &seen)
+	seen := testutil.DecodeItems[tankBody](t, rec)
 	if len(seen) != 1 || seen[0].ID != tank.ID || seen[0].Volume == nil || *seen[0].Volume != 100 || seen[0].VolumeUnit != "l" {
 		t.Errorf("admin sees %+v", seen)
 	}

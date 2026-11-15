@@ -172,10 +172,10 @@ func (e *env) addResults(tankID int64, measuredAt string, entries ...entry) []Re
 		body["measured_at"] = measuredAt
 	}
 	var out struct {
-		Results []ResultView `json:"results"`
+		Items []ResultView `json:"items"`
 	}
 	e.must(http.StatusCreated, http.MethodPost, tankPath(tankID, "/results"), body).decode(&out)
-	return out.Results
+	return out.Items
 }
 
 func (e *env) tankParams(tankID int64) TankParameters {

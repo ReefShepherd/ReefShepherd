@@ -42,12 +42,40 @@ export interface RequestOptions {
   query?: Record<string, QueryValue>;
 }
 
-export interface Api {
+/** One page of a collection, as the server sends it; next_cursor is null on the last page. */
+export interface Page<T> {
+  items: T[];
+  next_cursor: string | null;
+}
+
+/** The requests an Api makes; withLists adds the collection readers on top. */
+export interface BaseApi {
   get<T>(path: string, options?: RequestOptions): Promise<T>;
   post<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T>;
   patch<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T>;
   put<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T>;
   del<T = void>(path: string, body?: unknown, options?: RequestOptions): Promise<T>;
+}
+
+export interface Api extends BaseApi {
+  /** GETs a collection the server wraps as {items} and returns the items. */
+  list<T>(path: string, options?: RequestOptions): Promise<T[]>;
+  /** POSTs and reads back a collection the server wraps as {items}. */
+  postList<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T[]>;
+  /** GETs a collection that comes in pages, with its next_cursor. */
+  listPage<T>(path: string, options?: RequestOptions): Promise<Page<T>>;
+}
+
+/** Completes a BaseApi with the collection readers, the one place that knows the list envelope. */
+export function withLists(base: BaseApi): Api {
+  return {
+    ...base,
+    list: async <T>(path: string, options?: RequestOptions) =>
+      (await base.get<{ items: T[] }>(path, options)).items,
+    postList: async <T>(path: string, body?: unknown, options?: RequestOptions) =>
+      (await base.post<{ items: T[] }>(path, body, options)).items,
+    listPage: <T>(path: string, options?: RequestOptions) => base.get<Page<T>>(path, options)
+  };
 }
 
 export interface ApiDeps {
@@ -147,13 +175,13 @@ export function createApi(deps: ApiDeps = {}): Api {
     }
   }
 
-  return {
+  return withLists({
     get: (path, options) => request('GET', path, undefined, options),
     post: (path, body, options) => request('POST', path, body, options),
     patch: (path, body, options) => request('PATCH', path, body, options),
     put: (path, body, options) => request('PUT', path, body, options),
     del: (path, body, options) => request('DELETE', path, body, options)
-  };
+  });
 }
 
 export const api = createApi();

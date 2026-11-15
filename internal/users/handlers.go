@@ -93,7 +93,7 @@ func (s *Service) listUsers(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	httpx.WriteJSON(w, http.StatusOK, users)
+	httpx.List(w, http.StatusOK, users)
 	return nil
 }
 

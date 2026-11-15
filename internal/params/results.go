@@ -323,12 +323,8 @@ type ResultFilter struct {
 	Limit       int
 }
 
-// ResultPage is one page of results, newest first.
-type ResultPage struct {
-	Results []ResultView `json:"results"`
-	// NextCursor is passed back as the cursor to get the following page, and is null on the last page.
-	NextCursor *string `json:"next_cursor"`
-}
+// ResultPage is one page of results, newest first; its next cursor is passed back as the cursor to get the following page.
+type ResultPage = httpx.Page[ResultView]
 
 // ListResults returns a page of the tank's results, newest first.
 func (s *Service) ListResults(ctx context.Context, tankID int64, f ResultFilter) (ResultPage, error) {
@@ -354,7 +350,7 @@ func (s *Service) ListResults(ctx context.Context, tankID int64, f ResultFilter)
 	if err != nil {
 		return ResultPage{}, fmt.Errorf("list results: %w", err)
 	}
-	page := ResultPage{Results: []ResultView{}}
+	page := ResultPage{Items: []ResultView{}}
 	if len(rows) > limit {
 		rows = rows[:limit]
 		last := rows[len(rows)-1]
@@ -370,7 +366,7 @@ func (s *Service) ListResults(ctx context.Context, tankID int64, f ResultFilter)
 		if err != nil {
 			return ResultPage{}, err
 		}
-		page.Results = append(page.Results, v)
+		page.Items = append(page.Items, v)
 	}
 	return page, nil
 }

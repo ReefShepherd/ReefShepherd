@@ -24,7 +24,7 @@ func Routes(mux *http.ServeMux, deps Deps) {
 }
 
 func (s *Service) getUnits(w http.ResponseWriter, _ *http.Request) error {
-	httpx.WriteJSON(w, http.StatusOK, units.Catalog())
+	httpx.List(w, http.StatusOK, units.Catalog())
 	return nil
 }
 

@@ -33,7 +33,7 @@ func (s *Service) listTanks(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	httpx.WriteJSON(w, http.StatusOK, tanks)
+	httpx.List(w, http.StatusOK, tanks)
 	return nil
 }
 

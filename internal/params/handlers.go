@@ -44,7 +44,7 @@ func (s *Service) listParameters(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"parameters": defs})
+	httpx.List(w, http.StatusOK, defs)
 	return nil
 }
 
@@ -206,7 +206,7 @@ func (s *Service) createResults(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	httpx.WriteJSON(w, http.StatusCreated, map[string]any{"results": created})
+	httpx.List(w, http.StatusCreated, created)
 	return nil
 }
 
@@ -246,7 +246,7 @@ func (s *Service) listResults(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	httpx.WriteJSON(w, http.StatusOK, page)
+	httpx.ListPage(w, http.StatusOK, page)
 	return nil
 }
 

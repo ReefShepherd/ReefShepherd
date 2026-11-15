@@ -14,8 +14,8 @@ describe('paramsApi', () => {
   it('builds every tank path from the tank id', async () => {
     const { api, calls } = fakeApi({
       'PUT /tanks/5/parameters/4': {},
-      'POST /tanks/5/results': { results: [] },
-      'GET /tanks/5/results': { results: [], next_cursor: null }
+      'POST /tanks/5/results': { items: [] },
+      'GET /tanks/5/results': { items: [], next_cursor: null }
     });
     const params = createParamsApi(api);
     await params.saveTankParameter(5, 4, { enabled: true });
@@ -31,12 +31,14 @@ describe('paramsApi', () => {
 
   it('unwraps the parameter list and the stored results', async () => {
     const { api } = fakeApi({
-      'GET /parameters': { parameters: [{ id: 1 }] },
-      'POST /tanks/2/results': { results: [{ id: 9 }] }
+      'GET /parameters': { items: [{ id: 1 }] },
+      'POST /tanks/2/results': { items: [{ id: 9 }] },
+      'GET /tanks/2/results': { items: [{ id: 9 }], next_cursor: 'c1' }
     });
     const params = createParamsApi(api);
     expect(await params.definitions()).toEqual([{ id: 1 }]);
     expect(await params.createResults(2, { results: [] })).toEqual([{ id: 9 }]);
+    expect(await params.results(2)).toEqual({ items: [{ id: 9 }], next_cursor: 'c1' });
   });
 });
 
