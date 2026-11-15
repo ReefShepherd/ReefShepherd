@@ -31,3 +31,22 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Build output and local dev data
+/bin/
+/data/
+/.devdata/
+
+# Built web UI (the .gitkeep keeps go:embed working before the first build)
+/internal/webui/dist/*
+!/internal/webui/dist/.gitkeep
+
+# Web app tooling
+node_modules/
+/web/.svelte-kit/
+/web/test-results/
+/web/.vitest/
+/web/playwright-report/
+
+# Python bytecode from the repository check scripts
+__pycache__/
