@@ -8,7 +8,6 @@ import (
 
 	"github.com/reefshepherd/reefshepherd/internal/db"
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
-	"github.com/reefshepherd/reefshepherd/internal/settings"
 	"github.com/reefshepherd/reefshepherd/internal/testutil"
 )
 
@@ -28,7 +27,7 @@ func newEnv(t *testing.T) *env {
 	t.Helper()
 	database := testutil.OpenDB(t)
 	mux := http.NewServeMux()
-	Routes(mux, Deps{DB: database, Settings: settings.NewStore(database), Logger: testutil.Logger(t)})
+	Routes(mux, Deps{DB: database, Logger: testutil.Logger(t)})
 	e := &env{t: t, db: database, mux: mux}
 	testutil.Exec(t, database, `INSERT INTO users (id, username) VALUES (?, 'alice'), (?, 'bob')`, userA, userB)
 	return e

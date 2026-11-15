@@ -7,13 +7,11 @@ import (
 
 	"github.com/reefshepherd/reefshepherd/internal/db"
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
-	"github.com/reefshepherd/reefshepherd/internal/settings"
 )
 
 // Deps are the dependencies the package's handlers need.
 type Deps struct {
-	DB       *db.DB
-	Settings *settings.Store
+	DB *db.DB
 	// Logger receives unexpected failures.
 	Logger *slog.Logger
 }

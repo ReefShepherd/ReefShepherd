@@ -28,7 +28,7 @@ const (
 	sizeWide   = "wide"
 )
 
-// cardType describes one kind of dashboard card; later milestones add entries here.
+// cardType describes one kind of dashboard card; cardTypes is the only list of them.
 type cardType struct {
 	name string
 	// parameter is true when the card shows one parameter and so needs a parameter_id.
@@ -89,32 +89,58 @@ func NewService(deps Deps) *Service {
 
 // Get returns the user's cards for a tank, creating the default layout the first time the user has none.
 func (s *Service) Get(ctx context.Context, userID, tankID int64) (Layout, error) {
-	q := db.Q(s.DB.R)
-	if err := tanks.Require(ctx, s.DB.R, tankID); err != nil {
-		return Layout{}, err
-	}
-	n, err := q.CountDashboardCards(ctx, dbgen.CountDashboardCardsParams{UserID: userID, TankID: tankID})
-	if err != nil {
-		return Layout{}, fmt.Errorf("count dashboard cards: %w", err)
-	}
-	if n == 0 {
-		// The count is checked again inside the write so two first requests cannot both seed.
-		err := s.DB.InTx(ctx, func(tx *sql.Tx) error {
-			q := db.Q(tx)
-			n, err := q.CountDashboardCards(ctx, dbgen.CountDashboardCardsParams{UserID: userID, TankID: tankID})
-			if err != nil {
-				return fmt.Errorf("count dashboard cards: %w", err)
-			}
-			if n > 0 {
-				return nil
-			}
-			return s.seedDefault(ctx, q, userID, tankID)
-		})
-		if err != nil {
-			return Layout{}, err
+	var out Layout
+	var seed bool
+	// One read transaction keeps the card rows and the enabled-parameter list from the same snapshot.
+	err := s.inReadTx(ctx, func(tx *sql.Tx) error {
+		if err := tanks.Require(ctx, tx, tankID); err != nil {
+			return err
 		}
+		q := db.Q(tx)
+		n, err := q.CountDashboardCards(ctx, dbgen.CountDashboardCardsParams{UserID: userID, TankID: tankID})
+		if err != nil {
+			return fmt.Errorf("count dashboard cards: %w", err)
+		}
+		if n == 0 {
+			seed = true
+			return nil
+		}
+		out, err = list(ctx, q, userID, tankID)
+		return err
+	})
+	if err != nil || !seed {
+		return out, err
 	}
-	return list(ctx, q, userID, tankID)
+	// The tank and count are checked again inside the write so two first requests cannot both seed.
+	err = s.DB.InTx(ctx, func(tx *sql.Tx) error {
+		if err := tanks.Require(ctx, tx, tankID); err != nil {
+			return err
+		}
+		q := db.Q(tx)
+		n, err := q.CountDashboardCards(ctx, dbgen.CountDashboardCardsParams{UserID: userID, TankID: tankID})
+		if err != nil {
+			return fmt.Errorf("count dashboard cards: %w", err)
+		}
+		if n == 0 {
+			if err := s.seedDefault(ctx, q, userID, tankID); err != nil {
+				return err
+			}
+		}
+		out, err = list(ctx, q, userID, tankID)
+		return err
+	})
+	return out, err
+}
+
+// inReadTx runs fn in a read-only transaction on the reader pool, so every read in fn sees the database as it was when the first one ran.
+func (s *Service) inReadTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
+	tx, err := s.DB.R.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("begin read transaction: %w", err)
+	}
+	// Nothing was written, so ending the transaction is always a rollback.
+	defer func() { _ = tx.Rollback() }()
+	return fn(tx)
 }
 
 // Reset discards the user's cards for a tank and creates the default layout again.

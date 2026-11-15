@@ -40,7 +40,7 @@ func registerRoutes(mux *http.ServeMux, d routeDeps, ui http.Handler) {
 	settings.Routes(protected, settings.Deps{DB: d.DB, Settings: d.Settings, Auth: d.Auth, Logger: d.Logger})
 	tanks.Routes(protected, tanks.Deps{DB: d.DB, Settings: d.Settings, Logger: d.Logger})
 	params.Routes(protected, params.Deps{DB: d.DB, Settings: d.Settings, Logger: d.Logger})
-	dashboard.Routes(protected, dashboard.Deps{DB: d.DB, Settings: d.Settings, Logger: d.Logger})
+	dashboard.Routes(protected, dashboard.Deps{DB: d.DB, Logger: d.Logger})
 
 	// Any API path without a more specific route is a JSON 404, never the single-page-app fallback.
 	protected.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
