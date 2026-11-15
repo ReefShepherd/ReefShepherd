@@ -3,6 +3,7 @@
   import { onMount } from 'svelte';
   import { errorText } from '#lib/api/error-text.js';
   import { settingsApi, type InstanceSettings, type UnitFamily } from '#lib/api/settings.js';
+  import { loginUrl } from '#lib/auth/next.js';
   import Alert from '#lib/components/forms/Alert.svelte';
   import LoginModeField from '#lib/components/forms/LoginModeField.svelte';
   import TextField from '#lib/components/forms/TextField.svelte';
@@ -88,9 +89,9 @@
       draft = draftFromSettings(result);
       saved = true;
       if (goingBackToLogin) {
-        // The browser has no session yet, so the next step is to sign in.
+        // The browser has no session yet, so it signs in and comes back to this page.
         session.clear();
-        await goto('/login');
+        await goto(loginUrl(location.pathname + location.search));
         return;
       }
       await session.load();
