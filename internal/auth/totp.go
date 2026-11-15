@@ -3,7 +3,6 @@ package auth
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
@@ -169,17 +168,13 @@ func removeTOTP(ctx context.Context, q *dbgen.Queries, userID int64) error {
 
 // ResetMFA removes a user's two-step login and ends their sessions except the one with id keep, for a lost authenticator; ErrNotEnabled is not an error here.
 func (s *Service) ResetMFA(ctx context.Context, userID, keep int64) error {
-	err := s.DB.InTx(ctx, func(tx *sql.Tx) error {
+	return s.DB.InTx(ctx, func(tx *sql.Tx) error {
 		q := db.Q(tx)
 		if err := removeTOTP(ctx, q, userID); err != nil && !errors.Is(err, ErrNotEnabled) {
 			return err
 		}
-		if _, err := q.DeleteOtherUserSessions(ctx, dbgen.DeleteOtherUserSessionsParams{UserID: userID, ID: keep}); err != nil {
-			return fmt.Errorf("revoke sessions: %w", err)
-		}
-		return nil
+		return RevokeSessionsTx(ctx, q, userID, keep)
 	})
-	return err
 }
 
 // verifyTOTP checks a login code and burns its time step, so the same code cannot be used twice.
@@ -199,7 +194,7 @@ func (s *Service) verifyTOTP(ctx context.Context, userID int64, code string) (bo
 		return false, nil
 	}
 	// The update only succeeds while the stored step is older, which settles two concurrent uses of one code.
-	n, err := db.Q(s.DB.W).AdvanceTOTPStep(ctx, dbgen.AdvanceTOTPStepParams{LastUsedStep: step, UserID: userID, LastUsedStep_2: step})
+	n, err := db.Q(s.DB.W).AdvanceTOTPStep(ctx, dbgen.AdvanceTOTPStepParams{Step: step, UserID: userID})
 	if err != nil {
 		return false, fmt.Errorf("record totp step: %w", err)
 	}
@@ -266,15 +261,12 @@ func replaceRecoveryCodes(ctx context.Context, q *dbgen.Queries, userID int64, n
 	}
 	codes := make([]string, recoveryN)
 	for i := range codes {
-		raw := make([]byte, recoveryLen)
-		if _, err := rand.Read(raw); err != nil {
+		raw, err := RandomString(recoveryAbc, recoveryLen)
+		if err != nil {
 			return nil, fmt.Errorf("generate recovery code: %w", err)
 		}
-		for j, b := range raw {
-			raw[j] = recoveryAbc[int(b)%len(recoveryAbc)]
-		}
-		codes[i] = string(raw[:recoveryHalf]) + "-" + string(raw[recoveryHalf:])
-		err := q.InsertRecoveryCode(ctx, dbgen.InsertRecoveryCodeParams{
+		codes[i] = raw[:recoveryHalf] + "-" + raw[recoveryHalf:]
+		err = q.InsertRecoveryCode(ctx, dbgen.InsertRecoveryCodeParams{
 			UserID: userID, CodeHash: hashRecoveryCode(codes[i]), CreatedAt: db.FormatTime(now),
 		})
 		if err != nil {

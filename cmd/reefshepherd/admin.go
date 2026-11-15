@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -204,19 +203,5 @@ func yesNo(b bool) string {
 }
 
 func randomPassword() (string, error) {
-	// 256 is not a multiple of the alphabet size, so bytes above the limit are skipped to keep every character equally likely.
-	limit := 256 - 256%len(generatedPasswordChars)
-	out := make([]byte, 0, generatedPasswordLen)
-	buf := make([]byte, 2*generatedPasswordLen)
-	for len(out) < generatedPasswordLen {
-		if _, err := rand.Read(buf); err != nil {
-			return "", fmt.Errorf("generate password: %w", err)
-		}
-		for _, b := range buf {
-			if int(b) < limit && len(out) < generatedPasswordLen {
-				out = append(out, generatedPasswordChars[int(b)%len(generatedPasswordChars)])
-			}
-		}
-	}
-	return string(out), nil
+	return auth.RandomString(generatedPasswordChars, generatedPasswordLen)
 }

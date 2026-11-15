@@ -258,6 +258,48 @@ func TestSettlingTheTryThatSetTheLockLiftsIt(t *testing.T) {
 	}
 }
 
+// partialCollision finds a key that shares exactly one cell with a, so the lock in a's other cell is not one the key writes to.
+func partialCollision(t *testing.T, s *sketch, a string) string {
+	t.Helper()
+	ia := s.index(a)
+	for i := range 10_000 {
+		b := "other" + strconv.Itoa(i)
+		ib := s.index(b)
+		if (ia[0] == ib[0]) != (ia[1] == ib[1]) {
+			return b
+		}
+	}
+	t.Fatal("no key shares exactly one cell")
+	return ""
+}
+
+func TestRefundNeverLiftsAnotherKeysLock(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	l := newLimiter(func() time.Time { return now }, testutil.Logger(t))
+	l.names = newTable(4)
+	locked := "alice"
+	other := partialCollision(t, l.names.sketch, locked)
+	ips := addrs(100, 8)
+
+	for i := range freeFailures {
+		l.begin(ips[i], locked)
+	}
+	if _, wait := l.begin(ips[5], locked); wait != firstLockout {
+		t.Fatalf("alice wait = %v, want %v", wait, firstLockout)
+	}
+	// With alice's exact entry evicted, only the sketch holds her lock.
+	delete(l.names.own, locked)
+	// The other key writes to one of alice's cells but is not locked itself, so its try is admitted and its success takes that try back.
+	a, wait := l.begin(ips[6], other)
+	if wait != 0 {
+		t.Fatalf("a key sharing one cell was refused for %v", wait)
+	}
+	l.succeed(a)
+	if _, wait := l.begin(ips[7], locked); wait != firstLockout {
+		t.Errorf("alice wait after the other key's refund = %v, want %v", wait, firstLockout)
+	}
+}
+
 // junkAddr is the nth distinct IPv6 /64.
 func junkAddr(n int) netip.Addr {
 	return netip.MustParseAddr(fmt.Sprintf("2001:db8:%x:%x::1", n>>16, n&0xffff))

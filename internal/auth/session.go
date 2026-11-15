@@ -194,10 +194,9 @@ func (s *Service) touch(w http.ResponseWriter, r *http.Request, row dbgen.GetSes
 	return nil
 }
 
-// RevokeSessions ends all of a user's sessions except the one with id keep; pass 0 to keep none.
-func (s *Service) RevokeSessions(ctx context.Context, userID, keep int64) error {
-	_, err := db.Q(s.DB.W).DeleteOtherUserSessions(ctx, dbgen.DeleteOtherUserSessionsParams{UserID: userID, ID: keep})
-	if err != nil {
+// RevokeSessionsTx ends all of a user's sessions except the one with id keep, pass 0 to keep none, inside the caller's transaction.
+func RevokeSessionsTx(ctx context.Context, q *dbgen.Queries, userID, keep int64) error {
+	if _, err := q.DeleteOtherUserSessions(ctx, dbgen.DeleteOtherUserSessionsParams{UserID: userID, ID: keep}); err != nil {
 		return fmt.Errorf("revoke sessions: %w", err)
 	}
 	return nil

@@ -48,18 +48,17 @@ func (q *Queries) CountUsers(ctx context.Context) (int64, error) {
 }
 
 const createUser = `-- name: CreateUser :one
-INSERT INTO users (username, display_name, email, password_hash, role, password_changed_at)
-VALUES (?, ?, ?, ?, ?, ?)
+INSERT INTO users (username, display_name, email, role, created_at, updated_at)
+VALUES (?1, ?2, ?3, ?4, ?5, ?5)
 RETURNING id
 `
 
 type CreateUserParams struct {
-	Username          string
-	DisplayName       string
-	Email             *string
-	PasswordHash      *string
-	Role              string
-	PasswordChangedAt *string
+	Username    string
+	DisplayName string
+	Email       *string
+	Role        string
+	Now         string
 }
 
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (int64, error) {
@@ -67,9 +66,8 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (int64, 
 		arg.Username,
 		arg.DisplayName,
 		arg.Email,
-		arg.PasswordHash,
 		arg.Role,
-		arg.PasswordChangedAt,
+		arg.Now,
 	)
 	var id int64
 	err := row.Scan(&id)
@@ -242,22 +240,29 @@ SELECT
     u.disabled,
     CAST(u.password_hash IS NOT NULL AS INTEGER) AS has_password,
     CAST(t.confirmed_at IS NOT NULL AS INTEGER) AS totp_enabled,
+    CAST(COALESCE(p.theme, 'system') AS TEXT) AS theme,
+    CAST(COALESCE(p.locale, 'en') AS TEXT) AS locale,
+    p.default_tank_id,
     u.created_at
 FROM users AS u
 LEFT JOIN user_totp AS t ON t.user_id = u.id
+LEFT JOIN user_preferences AS p ON p.user_id = u.id
 ORDER BY u.id
 `
 
 type ListUsersRow struct {
-	ID          int64
-	Username    string
-	DisplayName string
-	Email       *string
-	Role        string
-	Disabled    int64
-	HasPassword int64
-	TotpEnabled int64
-	CreatedAt   string
+	ID            int64
+	Username      string
+	DisplayName   string
+	Email         *string
+	Role          string
+	Disabled      int64
+	HasPassword   int64
+	TotpEnabled   int64
+	Theme         string
+	Locale        string
+	DefaultTankID *int64
+	CreatedAt     string
 }
 
 func (q *Queries) ListUsers(ctx context.Context) ([]ListUsersRow, error) {
@@ -278,6 +283,9 @@ func (q *Queries) ListUsers(ctx context.Context) ([]ListUsersRow, error) {
 			&i.Disabled,
 			&i.HasPassword,
 			&i.TotpEnabled,
+			&i.Theme,
+			&i.Locale,
+			&i.DefaultTankID,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -291,49 +299,6 @@ func (q *Queries) ListUsers(ctx context.Context) ([]ListUsersRow, error) {
 		return nil, err
 	}
 	return items, nil
-}
-
-const rehashPassword = `-- name: RehashPassword :execrows
-UPDATE users
-SET password_hash = ?
-WHERE id = ? AND password_hash = ?
-`
-
-type RehashPasswordParams struct {
-	PasswordHash   *string
-	ID             int64
-	PasswordHash_2 *string
-}
-
-func (q *Queries) RehashPassword(ctx context.Context, arg RehashPasswordParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, rehashPassword, arg.PasswordHash, arg.ID, arg.PasswordHash_2)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const setUserPassword = `-- name: SetUserPassword :exec
-UPDATE users
-SET password_hash = ?, password_changed_at = ?, updated_at = ?
-WHERE id = ?
-`
-
-type SetUserPasswordParams struct {
-	PasswordHash      *string
-	PasswordChangedAt *string
-	UpdatedAt         string
-	ID                int64
-}
-
-func (q *Queries) SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error {
-	_, err := q.db.ExecContext(ctx, setUserPassword,
-		arg.PasswordHash,
-		arg.PasswordChangedAt,
-		arg.UpdatedAt,
-		arg.ID,
-	)
-	return err
 }
 
 const updateUserAccount = `-- name: UpdateUserAccount :exec

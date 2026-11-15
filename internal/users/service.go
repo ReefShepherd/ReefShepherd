@@ -87,15 +87,11 @@ func NewService(deps Deps) *Service {
 	return &Service{Deps: deps, now: time.Now}
 }
 
-func userFromRow(id int64, username, displayName string, email *string, role string, disabled, hasPassword, totp int64, created string) User {
+func userFromRow(r dbgen.GetUserByIDRow) User {
 	return User{
-		ID: id, Username: username, DisplayName: displayName, Email: email, Role: role,
-		Disabled: disabled != 0, HasPassword: hasPassword != 0, TOTPEnabled: totp != 0, CreatedAt: created,
+		ID: r.ID, Username: r.Username, DisplayName: r.DisplayName, Email: r.Email, Role: r.Role,
+		Disabled: r.Disabled != 0, HasPassword: r.HasPassword != 0, TOTPEnabled: r.TotpEnabled != 0, CreatedAt: r.CreatedAt,
 	}
-}
-
-func userOfRow(r dbgen.GetUserByIDRow) User {
-	return userFromRow(r.ID, r.Username, r.DisplayName, r.Email, r.Role, r.Disabled, r.HasPassword, r.TotpEnabled, r.CreatedAt)
 }
 
 // Refusals the handlers turn into 404 and 409 responses; the text is the message sent.
@@ -124,7 +120,7 @@ func (s *Service) account(ctx context.Context, id int64) (User, error) {
 	if err != nil {
 		return User{}, err
 	}
-	return userOfRow(row), nil
+	return userFromRow(row), nil
 }
 
 // Me returns the user with their preferences and the instance information.
@@ -137,7 +133,7 @@ func (s *Service) Me(ctx context.Context, id int64) (Me, error) {
 	if err != nil {
 		return Me{}, err
 	}
-	return Me{User: userOfRow(row), Theme: row.Theme, Locale: row.Locale, DefaultTankID: row.DefaultTankID, Instance: instance}, nil
+	return Me{User: userFromRow(row), Theme: row.Theme, Locale: row.Locale, DefaultTankID: row.DefaultTankID, Instance: instance}, nil
 }
 
 func (s *Service) instance(ctx context.Context) (Instance, error) {
@@ -164,7 +160,7 @@ func (s *Service) List(ctx context.Context) ([]User, error) {
 	}
 	out := make([]User, len(rows))
 	for i, r := range rows {
-		out[i] = userFromRow(r.ID, r.Username, r.DisplayName, r.Email, r.Role, r.Disabled, r.HasPassword, r.TotpEnabled, r.CreatedAt)
+		out[i] = userFromRow(dbgen.GetUserByIDRow(r))
 	}
 	return out, nil
 }
@@ -300,16 +296,16 @@ func createAccount(ctx context.Context, q *dbgen.Queries, in CreateInput, hash *
 	if n > 0 {
 		return 0, httpx.Reject("username is taken", "username", httpx.CodeTaken)
 	}
-	var changed *string
-	if hash != nil {
-		changed = &now
-	}
 	id, err := q.CreateUser(ctx, dbgen.CreateUserParams{
-		Username: in.Username, DisplayName: in.DisplayName, Email: in.Email,
-		PasswordHash: hash, Role: in.Role, PasswordChangedAt: changed,
+		Username: in.Username, DisplayName: in.DisplayName, Email: in.Email, Role: in.Role, Now: now,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("create user: %w", err)
+	}
+	if hash != nil {
+		if err := auth.SetPasswordTx(ctx, q, id, *hash, now); err != nil {
+			return 0, err
+		}
 	}
 	return id, nil
 }
@@ -386,19 +382,17 @@ func (s *Service) Update(ctx context.Context, actor httpx.User, keepSession, id 
 		if err != nil {
 			return fmt.Errorf("update user: %w", err)
 		}
-		keep := int64(0)
-		if actor.ID == id {
-			keep = keepSession
-		}
 		if hash != nil {
-			if err := q.SetUserPassword(ctx, dbgen.SetUserPasswordParams{PasswordHash: hash, PasswordChangedAt: &now, UpdatedAt: now, ID: id}); err != nil {
-				return fmt.Errorf("set password: %w", err)
+			if err := auth.SetPasswordTx(ctx, q, id, *hash, now); err != nil {
+				return err
 			}
 		}
 		if hash != nil || (disabled && cur.Disabled == 0) {
-			if _, err := q.DeleteOtherUserSessions(ctx, dbgen.DeleteOtherUserSessionsParams{UserID: id, ID: keep}); err != nil {
-				return fmt.Errorf("revoke sessions: %w", err)
+			keep := int64(0)
+			if actor.ID == id {
+				keep = keepSession
 			}
+			return auth.RevokeSessionsTx(ctx, q, id, keep)
 		}
 		return nil
 	})

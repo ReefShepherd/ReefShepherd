@@ -1,3 +1,13 @@
+-- name: SetUserPassword :exec
+UPDATE users
+SET password_hash = sqlc.arg(password_hash), password_changed_at = CAST(sqlc.arg(now) AS TEXT), updated_at = sqlc.arg(now)
+WHERE id = sqlc.arg(id);
+
+-- name: RehashPassword :execrows
+UPDATE users
+SET password_hash = sqlc.arg(new_hash)
+WHERE id = sqlc.arg(id) AND password_hash = sqlc.arg(old_hash);
+
 -- name: CreateSession :one
 INSERT INTO sessions (token_hash, user_id, stage, auth_method, user_agent, ip_address, created_at, last_seen_at, expires_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -69,8 +79,8 @@ WHERE user_id = ? AND confirmed_at IS NULL;
 
 -- name: AdvanceTOTPStep :execrows
 UPDATE user_totp
-SET last_used_step = ?
-WHERE user_id = ? AND confirmed_at IS NOT NULL AND last_used_step < ?;
+SET last_used_step = sqlc.arg(step)
+WHERE user_id = sqlc.arg(user_id) AND confirmed_at IS NOT NULL AND last_used_step < sqlc.arg(step);
 
 -- name: DeleteTOTP :execrows
 DELETE FROM user_totp

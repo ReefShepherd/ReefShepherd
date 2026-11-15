@@ -54,7 +54,7 @@ func (s *Service) ConfirmPassword(ctx context.Context, r *http.Request, userID i
 func (s *Service) rehash(ctx context.Context, userID int64, plain, old string) {
 	fresh, err := s.Passwords.Hash(ctx, plain)
 	if err == nil {
-		_, err = db.Q(s.DB.W).RehashPassword(ctx, dbgen.RehashPasswordParams{PasswordHash: &fresh, ID: userID, PasswordHash_2: &old})
+		_, err = db.Q(s.DB.W).RehashPassword(ctx, dbgen.RehashPasswordParams{NewHash: &fresh, ID: userID, OldHash: &old})
 	}
 	if err != nil {
 		s.Logger.Warn("upgrade password hash", slog.Int64("user_id", userID), slog.Any("error", err))
@@ -100,16 +100,19 @@ func (s *Service) ChangePassword(ctx context.Context, r *http.Request, userID in
 
 // SetPassword stores a new password hash and ends the user's sessions except the one with id keep, together or not at all.
 func (s *Service) SetPassword(ctx context.Context, userID int64, hash string, keep int64) error {
-	now := db.FormatTime(s.now())
 	return s.DB.InTx(ctx, func(tx *sql.Tx) error {
 		q := db.Q(tx)
-		err := q.SetUserPassword(ctx, dbgen.SetUserPasswordParams{PasswordHash: &hash, PasswordChangedAt: &now, UpdatedAt: now, ID: userID})
-		if err != nil {
-			return fmt.Errorf("store password: %w", err)
+		if err := SetPasswordTx(ctx, q, userID, hash, db.FormatTime(s.now())); err != nil {
+			return err
 		}
-		if _, err := q.DeleteOtherUserSessions(ctx, dbgen.DeleteOtherUserSessionsParams{UserID: userID, ID: keep}); err != nil {
-			return fmt.Errorf("revoke sessions: %w", err)
-		}
-		return nil
+		return RevokeSessionsTx(ctx, q, userID, keep)
 	})
+}
+
+// SetPasswordTx stores an already hashed password inside the caller's transaction, stamped with now in stored form; hashing stays outside so the write lock is not held for it.
+func SetPasswordTx(ctx context.Context, q *dbgen.Queries, userID int64, hash, now string) error {
+	if err := q.SetUserPassword(ctx, dbgen.SetUserPasswordParams{PasswordHash: &hash, Now: now, ID: userID}); err != nil {
+		return fmt.Errorf("store password: %w", err)
+	}
+	return nil
 }
