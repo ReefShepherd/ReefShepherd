@@ -34,7 +34,7 @@ describe('resultChanges', () => {
   it('sends nothing for an untouched draft, even though the stored time has seconds', () => {
     const edit = resultChanges(saved, draftFromResult(saved, 3, zone), zone);
     expect(edit.changes).toEqual({});
-    expect(edit.problems).toEqual({});
+    expect(edit.errors).toEqual({});
   });
 
   it('sends only the fields that changed', () => {
@@ -51,6 +51,6 @@ describe('resultChanges', () => {
   it('reports a value or time that cannot be read', () => {
     const draft = { value: 'abc', note: 'fresh', measuredAt: 'later' };
     const edit = resultChanges(saved, draft, zone);
-    expect(edit.problems).toEqual({ value: 'invalid_number', measuredAt: 'invalid_time' });
+    expect(edit.errors).toEqual({ value: 'invalid', measured_at: 'invalid' });
   });
 });

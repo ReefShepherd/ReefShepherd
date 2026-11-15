@@ -1,29 +1,36 @@
 package params
 
 import (
-	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
+	"github.com/reefshepherd/reefshepherd/internal/schedule"
+	"github.com/reefshepherd/reefshepherd/internal/tanks"
 )
 
-type handlerFunc func(w http.ResponseWriter, r *http.Request) error
-
-func (s *Service) handle(h handlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if err := h(w, r); err != nil {
-			httpx.Fail(s.Logger, w, r, err)
+// apiError gives the package's refusals, and the missing tank, their HTTP form.
+func apiError(err error) error {
+	for _, missing := range []error{tanks.ErrNotFound, errNoParameter, errNoResult} {
+		if errors.Is(err, missing) {
+			return httpx.NotFound(missing.Error())
 		}
 	}
+	for _, conflict := range []error{errBuiltinParameter, errParameterHasData, errParameterArchived} {
+		if errors.Is(err, conflict) {
+			return httpx.Conflict(conflict.Error())
+		}
+	}
+	return err
 }
 
-// pathID reads a positive integer path value, answering 404 with what was not found when it is not one.
-func pathID(r *http.Request, name, what string) (int64, error) {
+// pathID reads a positive integer path value, failing with notFound when it is not one.
+func pathID(r *http.Request, name string, notFound error) (int64, error) {
 	id, ok := httpx.PathID(r, name)
 	if !ok {
-		return 0, notFound(what)
+		return 0, notFound
 	}
 	return id, nil
 }
@@ -37,7 +44,7 @@ func (s *Service) listParameters(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"parameters": defs})
+	httpx.List(w, http.StatusOK, defs)
 	return nil
 }
 
@@ -63,18 +70,18 @@ func (s *Service) createParameter(w http.ResponseWriter, r *http.Request) error 
 	return nil
 }
 
-// patchParameterRequest keeps the clearable fields raw so an explicit null can be told from an absent field.
+// patchParameterRequest keeps the clearable fields nullable so an explicit null can be told from an absent field.
 type patchParameterRequest struct {
-	Name                    *string         `json:"name"`
-	UnitLabel               *string         `json:"unit_label"`
-	Decimals                *int            `json:"decimals"`
-	DefaultLow              json.RawMessage `json:"default_low"`
-	DefaultHigh             json.RawMessage `json:"default_high"`
-	DefaultTestIntervalDays json.RawMessage `json:"default_test_interval_days"`
+	Name                    *string                 `json:"name"`
+	UnitLabel               *string                 `json:"unit_label"`
+	Decimals                *int                    `json:"decimals"`
+	DefaultLow              httpx.Nullable[float64] `json:"default_low"`
+	DefaultHigh             httpx.Nullable[float64] `json:"default_high"`
+	DefaultTestIntervalDays httpx.Nullable[int]     `json:"default_test_interval_days"`
 }
 
 func (s *Service) patchParameter(w http.ResponseWriter, r *http.Request) error {
-	id, err := pathID(r, "id", "parameter")
+	id, err := pathID(r, "id", errNoParameter)
 	if err != nil {
 		return err
 	}
@@ -82,17 +89,7 @@ func (s *Service) patchParameter(w http.ResponseWriter, r *http.Request) error {
 	if err := httpx.DecodeJSON(r, &req); err != nil {
 		return err
 	}
-	fields := fieldErrors{}
-	in := UpdateDefinitionInput{
-		Name: req.Name, UnitLabel: req.UnitLabel, Decimals: req.Decimals,
-		DefaultLow:              nullableOf[float64](req.DefaultLow, "default_low", "a number", fields),
-		DefaultHigh:             nullableOf[float64](req.DefaultHigh, "default_high", "a number", fields),
-		DefaultTestIntervalDays: nullableOf[int](req.DefaultTestIntervalDays, "default_test_interval_days", "a whole number", fields),
-	}
-	if err := fields.err("invalid parameter"); err != nil {
-		return err
-	}
-	def, err := s.UpdateDefinition(r.Context(), id, in)
+	def, err := s.UpdateDefinition(r.Context(), id, UpdateDefinitionInput(req))
 	if err != nil {
 		return err
 	}
@@ -109,7 +106,7 @@ func (s *Service) unarchiveParameter(w http.ResponseWriter, r *http.Request) err
 }
 
 func (s *Service) setArchived(w http.ResponseWriter, r *http.Request, archived bool) error {
-	id, err := pathID(r, "id", "parameter")
+	id, err := pathID(r, "id", errNoParameter)
 	if err != nil {
 		return err
 	}
@@ -125,7 +122,7 @@ func (s *Service) setArchived(w http.ResponseWriter, r *http.Request, archived b
 }
 
 func (s *Service) deleteParameter(w http.ResponseWriter, r *http.Request) error {
-	id, err := pathID(r, "id", "parameter")
+	id, err := pathID(r, "id", errNoParameter)
 	if err != nil {
 		return err
 	}
@@ -140,7 +137,7 @@ func (s *Service) deleteParameter(w http.ResponseWriter, r *http.Request) error 
 }
 
 func (s *Service) listTankParameters(w http.ResponseWriter, r *http.Request) error {
-	tankID, err := pathID(r, "id", "tank")
+	tankID, err := pathID(r, "id", tanks.ErrNotFound)
 	if err != nil {
 		return err
 	}
@@ -152,21 +149,21 @@ func (s *Service) listTankParameters(w http.ResponseWriter, r *http.Request) err
 	return nil
 }
 
-// putTankParameterRequest keeps the clearable fields raw so an explicit null can be told from an absent field.
+// putTankParameterRequest keeps the clearable fields nullable so an explicit null can be told from an absent field.
 type putTankParameterRequest struct {
-	Enabled   *bool           `json:"enabled"`
-	IdealLow  json.RawMessage `json:"ideal_low"`
-	IdealHigh json.RawMessage `json:"ideal_high"`
-	Schedule  *Schedule       `json:"schedule"`
-	SortOrder *int            `json:"sort_order"`
+	Enabled   *bool                   `json:"enabled"`
+	IdealLow  httpx.Nullable[float64] `json:"ideal_low"`
+	IdealHigh httpx.Nullable[float64] `json:"ideal_high"`
+	Schedule  *schedule.Columns       `json:"schedule"`
+	SortOrder *int                    `json:"sort_order"`
 }
 
 func (s *Service) putTankParameter(w http.ResponseWriter, r *http.Request) error {
-	tankID, err := pathID(r, "id", "tank")
+	tankID, err := pathID(r, "id", tanks.ErrNotFound)
 	if err != nil {
 		return err
 	}
-	parameterID, err := pathID(r, "pid", "parameter")
+	parameterID, err := pathID(r, "pid", errNoParameter)
 	if err != nil {
 		return err
 	}
@@ -174,16 +171,7 @@ func (s *Service) putTankParameter(w http.ResponseWriter, r *http.Request) error
 	if err := httpx.DecodeJSON(r, &req); err != nil {
 		return err
 	}
-	fields := fieldErrors{}
-	in := SetTankParameterInput{
-		Enabled: req.Enabled, Schedule: req.Schedule, SortOrder: req.SortOrder,
-		IdealLow:  nullableOf[float64](req.IdealLow, "ideal_low", "a number", fields),
-		IdealHigh: nullableOf[float64](req.IdealHigh, "ideal_high", "a number", fields),
-	}
-	if err := fields.err("invalid parameter settings"); err != nil {
-		return err
-	}
-	out, err := s.SetTankParameter(r.Context(), tankID, parameterID, in)
+	out, err := s.SetTankParameter(r.Context(), tankID, parameterID, SetTankParameterInput(req))
 	if err != nil {
 		return err
 	}
@@ -201,14 +189,11 @@ type createResultsRequest struct {
 }
 
 func (s *Service) createResults(w http.ResponseWriter, r *http.Request) error {
-	tankID, err := pathID(r, "id", "tank")
+	tankID, err := pathID(r, "id", tanks.ErrNotFound)
 	if err != nil {
 		return err
 	}
-	user, err := httpx.RequireUser(r)
-	if err != nil {
-		return err
-	}
+	user, _ := httpx.CurrentUser(r.Context())
 	var req createResultsRequest
 	if err := httpx.DecodeJSON(r, &req); err != nil {
 		return err
@@ -221,80 +206,80 @@ func (s *Service) createResults(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	httpx.WriteJSON(w, http.StatusCreated, map[string]any{"results": created})
+	httpx.List(w, http.StatusCreated, created)
 	return nil
 }
 
 func (s *Service) listResults(w http.ResponseWriter, r *http.Request) error {
-	tankID, err := pathID(r, "id", "tank")
+	tankID, err := pathID(r, "id", tanks.ErrNotFound)
 	if err != nil {
 		return err
 	}
 	q := r.URL.Query()
-	fields := fieldErrors{}
+	fields := httpx.FieldErrors{Message: "invalid query"}
 	f := ResultFilter{Cursor: q.Get("cursor")}
 	if raw := q.Get("parameter_id"); raw != "" {
 		id, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil || id < 1 {
-			fields.add("parameter_id", "must be a positive whole number")
+			fields.Add("parameter_id", httpx.CodeInvalid)
 		} else {
 			f.ParameterID = &id
 		}
 	}
-	f.From = queryTime(q.Get("from"), "from", fields)
-	f.To = queryTime(q.Get("to"), "to", fields)
+	f.From = queryTime(q.Get("from"), "from", &fields)
+	f.To = queryTime(q.Get("to"), "to", &fields)
 	if f.From != nil && f.To != nil && f.From.After(*f.To) {
-		fields.add("from", "must not be after to")
+		fields.Add("from", httpx.CodeOutOfRange)
 	}
 	if raw := q.Get("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n < 1 || n > maxPageSize {
-			fields.add("limit", "must be a whole number from 1 to "+strconv.Itoa(maxPageSize))
+			fields.Add("limit", httpx.CodeOutOfRange)
 		} else {
 			f.Limit = n
 		}
 	}
-	if err := fields.err("invalid query"); err != nil {
+	if err := fields.Err(); err != nil {
 		return err
 	}
 	page, err := s.ListResults(r.Context(), tankID, f)
 	if err != nil {
 		return err
 	}
-	httpx.WriteJSON(w, http.StatusOK, page)
+	httpx.ListPage(w, http.StatusOK, page)
 	return nil
 }
 
 // queryTime reads an optional RFC 3339 query value.
-func queryTime(raw, field string, fields fieldErrors) *time.Time {
+func queryTime(raw, field string, fields *httpx.FieldErrors) *time.Time {
 	if raw == "" {
 		return nil
 	}
-	t, err := parseTimestamp(raw)
-	if err != nil {
-		fields.add(field, err.Error())
+	t, ok := parseTimestamp(raw)
+	if !ok {
+		fields.Add(field, httpx.CodeInvalid)
 		return nil
 	}
 	return &t
 }
 
 func (s *Service) getSeries(w http.ResponseWriter, r *http.Request) error {
-	tankID, err := pathID(r, "id", "tank")
+	tankID, err := pathID(r, "id", tanks.ErrNotFound)
 	if err != nil {
 		return err
 	}
-	parameterID, err := pathID(r, "pid", "parameter")
+	parameterID, err := pathID(r, "pid", errNoParameter)
 	if err != nil {
 		return err
 	}
 	q := r.URL.Query()
-	fields := fieldErrors{}
-	from := queryTime(q.Get("from"), "from", fields)
-	to := queryTime(q.Get("to"), "to", fields)
+	fields := httpx.FieldErrors{Message: "invalid query"}
+	from := queryTime(q.Get("from"), "from", &fields)
+	to := queryTime(q.Get("to"), "to", &fields)
 	if from != nil && to != nil && from.After(*to) {
-		fields.add("from", "must not be after to")
+		fields.Add("from", httpx.CodeOutOfRange)
 	}
-	if err := fields.err("invalid query"); err != nil {
+	if err := fields.Err(); err != nil {
 		return err
 	}
 	out, err := s.GetSeries(r.Context(), tankID, parameterID, from, to)
@@ -312,7 +297,7 @@ type patchResultRequest struct {
 }
 
 func (s *Service) patchResult(w http.ResponseWriter, r *http.Request) error {
-	id, err := pathID(r, "id", "result")
+	id, err := pathID(r, "id", errNoResult)
 	if err != nil {
 		return err
 	}
@@ -329,7 +314,7 @@ func (s *Service) patchResult(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Service) deleteResult(w http.ResponseWriter, r *http.Request) error {
-	id, err := pathID(r, "id", "result")
+	id, err := pathID(r, "id", errNoResult)
 	if err != nil {
 		return err
 	}

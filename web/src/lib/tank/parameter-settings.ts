@@ -1,5 +1,7 @@
 import type { TankParameter, TankParameterChanges } from '#lib/api/params.js';
 import { decimalText, parseDecimal } from '#lib/format/decimal.js';
+import type { FieldErrors } from '#lib/forms/codes.js';
+import { validateLimitPair } from '#lib/forms/validation.js';
 import {
   normalizeSchedule,
   sameSchedule,
@@ -60,12 +62,10 @@ export function draftFromParameter(p: TankParameter): ParameterDraft {
 
 export interface ParameterEdit {
   changes: TankParameterChanges;
-  problems: {
-    low?: 'invalid_number';
-    high?: 'invalid_number';
-    range?: 'low_above_high';
-    schedule?: ScheduleProblem[];
-  };
+  /** The limits that cannot be saved, keyed by the server's field names; `range` flags a low limit above the high one. */
+  errors: FieldErrors;
+  /** What is wrong with the schedule, for the schedule editor to explain. */
+  schedule: ScheduleProblem[];
 }
 
 function limit(text: string): number | null | 'invalid' {
@@ -76,20 +76,14 @@ function limit(text: string): number | null | 'invalid' {
 /** The settings the draft changes, and the entries that cannot be saved; a blank limit clears it. */
 export function parameterChanges(p: TankParameter, draft: ParameterDraft): ParameterEdit {
   const changes: TankParameterChanges = {};
-  const problems: ParameterEdit['problems'] = {};
   const low = limit(draft.low);
   const high = limit(draft.high);
+  if (low !== 'invalid' && low !== p.ideal_low) changes.ideal_low = low;
+  if (high !== 'invalid' && high !== p.ideal_high) changes.ideal_high = high;
 
-  if (low === 'invalid') problems.low = 'invalid_number';
-  else if (low !== p.ideal_low) changes.ideal_low = low;
-  if (high === 'invalid') problems.high = 'invalid_number';
-  else if (high !== p.ideal_high) changes.ideal_high = high;
-  if (typeof low === 'number' && typeof high === 'number' && low > high)
-    problems.range = 'low_above_high';
-
-  const scheduleIssues = scheduleProblems(draft.schedule);
-  if (scheduleIssues.length > 0) problems.schedule = scheduleIssues;
-  else if (!sameSchedule(draft.schedule, p.schedule))
+  const schedule = scheduleProblems(draft.schedule);
+  if (schedule.length === 0 && !sameSchedule(draft.schedule, p.schedule))
     changes.schedule = normalizeSchedule(draft.schedule);
-  return { changes, problems };
+  const errors = validateLimitPair(draft.low, draft.high, { low: 'ideal_low', high: 'ideal_high' });
+  return { changes, errors, schedule };
 }

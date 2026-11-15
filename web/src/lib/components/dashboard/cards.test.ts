@@ -80,9 +80,9 @@ describe('removeCard', () => {
 
 describe('addCard and availableCards', () => {
   const kinds = [
-    { type: 'parameter', needsParameter: true },
-    { type: 'parameter_chart', needsParameter: true },
-    { type: 'tests_due', needsParameter: false }
+    { cardType: 'parameter', needsParameter: true },
+    { cardType: 'parameter_chart', needsParameter: true },
+    { cardType: 'tests_due', needsParameter: false }
   ];
 
   it('offers every type once, and per parameter for the types that show one', () => {

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 	"github.com/reefshepherd/reefshepherd/internal/units"
 )
 
@@ -23,11 +24,7 @@ func (e *env) customParameter(body map[string]any) int64 {
 
 func (e *env) definitions(query string) []Definition {
 	e.t.Helper()
-	var out struct {
-		Parameters []Definition `json:"parameters"`
-	}
-	e.must(http.StatusOK, http.MethodGet, "/api/v1/parameters"+query, nil).decode(&out)
-	return out.Parameters
+	return testutil.DecodeItems[Definition](e.t, e.must(http.StatusOK, http.MethodGet, "/api/v1/parameters"+query, nil).ResponseRecorder)
 }
 
 func TestListShipsThePresetsInOrderWithDisplayDefaults(t *testing.T) {
@@ -87,30 +84,30 @@ func TestCreateParameterFieldValidation(t *testing.T) {
 		body   map[string]any
 		fields []string
 	}{
-		{"blank name", map[string]any{"name": "  "}, []string{"name"}},
-		{"missing name", map[string]any{"unit_label": "ppm"}, []string{"name"}},
-		{"long name", map[string]any{"name": repeat("x", 61)}, []string{"name"}},
-		{"duplicate of a preset, ignoring case", map[string]any{"name": "pH"}, []string{"name"}},
-		{"long label", map[string]any{"name": "A", "unit_label": repeat("u", 17)}, []string{"unit_label"}},
-		{"decimals too high", map[string]any{"name": "A", "decimals": 5}, []string{"decimals"}},
-		{"decimals negative", map[string]any{"name": "A", "decimals": -1}, []string{"decimals"}},
-		{"low above high", map[string]any{"name": "A", "default_low": 5, "default_high": 1}, []string{"default_low"}},
-		{"interval zero", map[string]any{"name": "A", "default_test_interval_days": 0}, []string{"default_test_interval_days"}},
-		{"interval huge", map[string]any{"name": "A", "default_test_interval_days": 99999}, []string{"default_test_interval_days"}},
-		{"several at once", map[string]any{"name": "", "decimals": 9, "default_test_interval_days": -3}, []string{"name", "decimals", "default_test_interval_days"}},
-		{"wrong type", map[string]any{"name": "A", "decimals": "two"}, []string{"decimals"}},
-		{"family is not settable", map[string]any{"name": "A", "unit_family": "temperature"}, []string{"unit_family"}},
+		{"blank name", map[string]any{"name": "  "}, []string{"name=required"}},
+		{"missing name", map[string]any{"unit_label": "ppm"}, []string{"name=required"}},
+		{"long name", map[string]any{"name": repeat("x", 61)}, []string{"name=too_long"}},
+		{"duplicate of a preset, ignoring case", map[string]any{"name": "pH"}, []string{"name=taken"}},
+		{"long label", map[string]any{"name": "A", "unit_label": repeat("u", 17)}, []string{"unit_label=too_long"}},
+		{"decimals too high", map[string]any{"name": "A", "decimals": 5}, []string{"decimals=out_of_range"}},
+		{"decimals negative", map[string]any{"name": "A", "decimals": -1}, []string{"decimals=out_of_range"}},
+		{"low above high", map[string]any{"name": "A", "default_low": 5, "default_high": 1}, []string{"default_low=out_of_range"}},
+		{"interval zero", map[string]any{"name": "A", "default_test_interval_days": 0}, []string{"default_test_interval_days=out_of_range"}},
+		{"interval huge", map[string]any{"name": "A", "default_test_interval_days": 99999}, []string{"default_test_interval_days=out_of_range"}},
+		{"several at once", map[string]any{"name": "", "decimals": 9, "default_test_interval_days": -3}, []string{"name=required", "decimals=out_of_range", "default_test_interval_days=out_of_range"}},
+		{"wrong type", map[string]any{"name": "A", "decimals": "two"}, []string{"decimals=invalid"}},
+		{"family is not settable", map[string]any{"name": "A", "unit_family": "temperature"}, []string{"unit_family=invalid"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			e.invalid(http.MethodPost, "/api/v1/parameters", tc.body, tc.fields...)
 		})
 	}
-	if n := e.count(`SELECT COUNT(*) FROM parameter_definitions`); n != 10 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM parameter_definitions`); n != 10 {
 		t.Errorf("%d definitions after rejected requests, want the 10 presets", n)
 	}
 	e.customParameter(map[string]any{"name": "Taken"})
-	e.invalid(http.MethodPost, "/api/v1/parameters", map[string]any{"name": "TAKEN"}, "name")
+	e.invalid(http.MethodPost, "/api/v1/parameters", map[string]any{"name": "TAKEN"}, "name=taken")
 }
 
 func repeat(s string, n int) string {
@@ -142,10 +139,10 @@ func TestPatchParameter(t *testing.T) {
 		t.Errorf("empty patch = %+v", def)
 	}
 
-	e.invalid(http.MethodPatch, paramPath(id, ""), map[string]any{"name": ""}, "name")
-	e.invalid(http.MethodPatch, paramPath(id, ""), map[string]any{"default_low": 9}, "default_low")
-	e.invalid(http.MethodPatch, paramPath(id, ""), map[string]any{"name": "pH"}, "name")
-	e.invalid(http.MethodPatch, paramPath(id, ""), map[string]any{"default_low": "low"}, "default_low")
+	e.invalid(http.MethodPatch, paramPath(id, ""), map[string]any{"name": ""}, "name=required")
+	e.invalid(http.MethodPatch, paramPath(id, ""), map[string]any{"default_low": 9}, "default_low=out_of_range")
+	e.invalid(http.MethodPatch, paramPath(id, ""), map[string]any{"name": "pH"}, "name=taken")
+	e.invalid(http.MethodPatch, paramPath(id, ""), map[string]any{"default_low": "low"}, "default_low=invalid")
 	e.fail(http.StatusNotFound, "not_found", http.MethodPatch, paramPath(9999, ""), map[string]any{"name": "x"})
 	e.fail(http.StatusNotFound, "not_found", http.MethodPatch, "/api/v1/parameters/abc", map[string]any{"name": "x"})
 	// Renaming a parameter to its own name is not a clash.
@@ -171,8 +168,8 @@ func TestPatchPresetDefaultsUseDisplayUnits(t *testing.T) {
 
 	// A preset can be renamed, but a unit family parameter keeps the catalog label and precision.
 	e.must(http.StatusOK, http.MethodPatch, paramPath(temp, ""), map[string]any{"name": "Water temp"})
-	e.invalid(http.MethodPatch, paramPath(temp, ""), map[string]any{"unit_label": "deg", "decimals": 3}, "unit_label", "decimals")
-	e.invalid(http.MethodPatch, paramPath(temp, ""), map[string]any{"default_low": 9999}, "default_low")
+	e.invalid(http.MethodPatch, paramPath(temp, ""), map[string]any{"unit_label": "deg", "decimals": 3}, "unit_label=invalid", "decimals=invalid")
+	e.invalid(http.MethodPatch, paramPath(temp, ""), map[string]any{"default_low": 9999}, "default_low=out_of_range")
 }
 
 func TestArchiveHidesAParameterWithoutLosingItsResults(t *testing.T) {
@@ -205,7 +202,7 @@ func TestArchiveHidesAParameterWithoutLosingItsResults(t *testing.T) {
 			t.Error("archived parameter is still offered for the tank")
 		}
 	}
-	if n := e.count(`SELECT COUNT(*) FROM test_results WHERE parameter_id = ?`, id); n != 1 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM test_results WHERE parameter_id = ?`, id); n != 1 {
 		t.Errorf("%d results kept, want 1", n)
 	}
 	// History stays readable and the series still works.
@@ -216,8 +213,8 @@ func TestArchiveHidesAParameterWithoutLosingItsResults(t *testing.T) {
 	}
 	var page ResultPage
 	e.must(http.StatusOK, http.MethodGet, tankPath(tank, "/results"), nil).decode(&page)
-	if len(page.Results) != 1 || page.Results[0].ParameterName != "Iodine" {
-		t.Errorf("results = %+v", page.Results)
+	if len(page.Items) != 1 || page.Items[0].ParameterName != "Iodine" {
+		t.Errorf("results = %+v", page.Items)
 	}
 
 	e.must(http.StatusOK, http.MethodPost, paramPath(id, "/unarchive"), nil).decode(&def)
@@ -230,7 +227,7 @@ func TestArchiveHidesAParameterWithoutLosingItsResults(t *testing.T) {
 	}
 	e.fail(http.StatusNotFound, "not_found", http.MethodPost, paramPath(9999, "/archive"), nil)
 	e.fail(http.StatusNotFound, "not_found", http.MethodPost, paramPath(9999, "/unarchive"), nil)
-	e.invalid(http.MethodGet, "/api/v1/parameters?include_archived=maybe", nil, "include_archived")
+	e.invalid(http.MethodGet, "/api/v1/parameters?include_archived=maybe", nil, "include_archived=invalid")
 }
 
 func TestDeleteOnlyWithoutResults(t *testing.T) {
@@ -243,15 +240,15 @@ func TestDeleteOnlyWithoutResults(t *testing.T) {
 
 	e.fail(http.StatusConflict, "conflict", http.MethodDelete, paramPath(used, ""), nil)
 	e.fail(http.StatusConflict, "conflict", http.MethodDelete, paramPath(e.preset("ph"), ""), nil)
-	if n := e.count(`SELECT COUNT(*) FROM parameter_definitions`); n != 12 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM parameter_definitions`); n != 12 {
 		t.Fatalf("%d definitions after refused deletes, want 12", n)
 	}
 
 	e.must(http.StatusNoContent, http.MethodDelete, paramPath(unused, ""), nil)
-	if n := e.count(`SELECT COUNT(*) FROM parameter_definitions WHERE id = ?`, unused); n != 0 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM parameter_definitions WHERE id = ?`, unused); n != 0 {
 		t.Error("the unused parameter is still there")
 	}
-	if n := e.count(`SELECT COUNT(*) FROM tank_parameters WHERE parameter_id = ?`, unused); n != 0 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM tank_parameters WHERE parameter_id = ?`, unused); n != 0 {
 		t.Error("the tank's settings for the deleted parameter are still there")
 	}
 	e.fail(http.StatusNotFound, "not_found", http.MethodDelete, paramPath(unused, ""), nil)
@@ -259,6 +256,6 @@ func TestDeleteOnlyWithoutResults(t *testing.T) {
 	// Once its results are gone the parameter can be deleted.
 	var page ResultPage
 	e.must(http.StatusOK, http.MethodGet, tankPath(tank, "/results"), nil).decode(&page)
-	e.must(http.StatusNoContent, http.MethodDelete, "/api/v1/results/"+strconv.FormatInt(page.Results[0].ID, 10), nil)
+	e.must(http.StatusNoContent, http.MethodDelete, "/api/v1/results/"+strconv.FormatInt(page.Items[0].ID, 10), nil)
 	e.must(http.StatusNoContent, http.MethodDelete, paramPath(used, ""), nil)
 }

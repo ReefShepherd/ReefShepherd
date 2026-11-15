@@ -1,13 +1,15 @@
 package dashboard
 
 import (
-	"fmt"
 	"net/http"
 	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/reefshepherd/reefshepherd/internal/httpx"
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 )
 
 func wantShape(t *testing.T, got []Card, want ...string) {
@@ -34,9 +36,9 @@ func TestDefaultLayoutIsCreatedOnFirstRequest(t *testing.T) {
 	e.enable(tank, second, true, 3)
 	e.enable(tank, off, false, 0)
 	e.enable(tank, archived, true, 0)
-	e.exec(`UPDATE parameter_definitions SET archived_at = '2026-01-01T00:00:00Z' WHERE id = ?`, archived)
+	testutil.Exec(e.t, e.db, `UPDATE parameter_definitions SET archived_at = '2026-01-01T00:00:00Z' WHERE id = ?`, archived)
 
-	if n := e.count(`SELECT COUNT(*) FROM dashboard_cards`); n != 0 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM dashboard_cards`); n != 0 {
 		t.Fatalf("%d cards exist before the first request", n)
 	}
 	cards := e.get(userA, tank)
@@ -52,7 +54,7 @@ func TestDefaultLayoutIsCreatedOnFirstRequest(t *testing.T) {
 	if !reflect.DeepEqual(cards, again) {
 		t.Errorf("second GET = %+v, want %+v", again, cards)
 	}
-	if n := e.count(`SELECT COUNT(*) FROM dashboard_cards`); n != 4 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM dashboard_cards`); n != 4 {
 		t.Errorf("%d cards stored, want 4", n)
 	}
 }
@@ -80,7 +82,7 @@ func TestConcurrentFirstRequestsCreateOneLayout(t *testing.T) {
 	}
 	close(start)
 	wg.Wait()
-	if n := e.count(`SELECT COUNT(*) FROM dashboard_cards WHERE user_id = ? AND tank_id = ?`, userA, tank); n != 3 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM dashboard_cards WHERE user_id = ? AND tank_id = ?`, userA, tank); n != 3 {
 		t.Errorf("%d cards stored after concurrent first requests, want 3", n)
 	}
 }
@@ -111,7 +113,7 @@ func TestReplaceStoresTheWholeListInOrder(t *testing.T) {
 	// A second replace drops what the first one stored, including cards it left out.
 	got = e.put(userA, tank, []map[string]any{{"card_type": "tests_due", "size": "wide"}})
 	wantShape(t, got, "tests_due:-:wide")
-	if n := e.count(`SELECT COUNT(*) FROM dashboard_cards`); n != 1 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM dashboard_cards`); n != 1 {
 		t.Errorf("%d cards stored, want 1", n)
 	}
 }
@@ -122,8 +124,8 @@ func TestReplaceStoresOptionsCompacted(t *testing.T) {
 	p := e.param("A")
 	e.enable(tank, p, true, 0)
 	body := `{"cards":[{"card_type":"parameter_chart","parameter_id":` + id(p) + `,"options":{ "b" : 1,  "a" : [1, 2] }}]}`
-	rec := newRawRequest(e, http.MethodPut, dashPath(tank, ""), "application/json", body)
-	e.status(rec, http.StatusOK)
+	rec := testutil.DoRaw(e.t, e.mux, http.MethodPut, dashPath(tank, ""), "application/json", body, testutil.AsUser(userA, httpx.RoleMember))
+	testutil.ExpectStatus(e.t, rec, http.StatusOK)
 	var stored string
 	if err := e.db.R.QueryRow(`SELECT options_json FROM dashboard_cards`).Scan(&stored); err != nil {
 		t.Fatal(err)
@@ -131,7 +133,7 @@ func TestReplaceStoresOptionsCompacted(t *testing.T) {
 	if stored != `{"b":1,"a":[1,2]}` {
 		t.Errorf("options_json = %q", stored)
 	}
-	if got := decode[Layout](t, rec).Cards[0]; string(got.Options) != stored {
+	if got := testutil.Decode[Layout](t, rec).Cards[0]; string(got.Options) != stored {
 		t.Errorf("response options = %s", got.Options)
 	}
 }
@@ -163,38 +165,38 @@ func TestReplaceValidation(t *testing.T) {
 		cards any
 		want  map[string]string
 	}{
-		{"no cards", []map[string]any{}, map[string]string{"cards": "must have at least one card"}},
-		{"cards missing", nil, map[string]string{"cards": "must have at least one card"}},
-		{"too many", tooMany, map[string]string{"cards": fmt.Sprintf("must have at most %d cards", maxCards)}},
-		{"missing type", []map[string]any{{}}, map[string]string{"cards.0.card_type": "is required"}},
-		{"unknown type", []map[string]any{{"card_type": "feeding_today"}}, map[string]string{"cards.0.card_type": "must be one of parameter, parameter_chart, tests_due"}},
-		{"parameter without id", []map[string]any{{"card_type": "tests_due"}, {"card_type": "parameter"}}, map[string]string{"cards.1.parameter_id": "is required for this card type"}},
-		{"chart without id", []map[string]any{{"card_type": "parameter_chart"}}, map[string]string{"cards.0.parameter_id": "is required for this card type"}},
-		{"disabled parameter", []map[string]any{{"card_type": "parameter", "parameter_id": off}}, map[string]string{"cards.0.parameter_id": "must be a parameter enabled on this tank"}},
-		{"other tank's parameter", []map[string]any{{"card_type": "parameter", "parameter_id": foreign}}, map[string]string{"cards.0.parameter_id": "must be a parameter enabled on this tank"}},
-		{"unknown parameter", []map[string]any{{"card_type": "parameter_chart", "parameter_id": 99999}}, map[string]string{"cards.0.parameter_id": "must be a parameter enabled on this tank"}},
-		{"tests_due with parameter", []map[string]any{{"card_type": "tests_due", "parameter_id": on}}, map[string]string{"cards.0.parameter_id": "must be empty for this card type"}},
-		{"bad size", []map[string]any{{"card_type": "tests_due", "size": "huge"}}, map[string]string{"cards.0.size": "must be one of normal, wide"}},
-		{"options not an object", []map[string]any{{"card_type": "tests_due", "options": []int{1}}}, map[string]string{"cards.0.options": "must be a JSON object"}},
-		{"options a string", []map[string]any{{"card_type": "tests_due", "options": "x"}}, map[string]string{"cards.0.options": "must be a JSON object"}},
-		{"options too big", []map[string]any{{"card_type": "tests_due", "options": longOptions}}, map[string]string{"cards.0.options": fmt.Sprintf("must be at most %d bytes", maxOptionsBytes)}},
-		{"duplicate tests_due", []map[string]any{{"card_type": "tests_due"}, {"card_type": "tests_due"}}, map[string]string{"cards.1": "duplicates cards.0"}},
+		{"no cards", []map[string]any{}, map[string]string{"cards": "required"}},
+		{"cards missing", nil, map[string]string{"cards": "required"}},
+		{"too many", tooMany, map[string]string{"cards": "too_long"}},
+		{"missing type", []map[string]any{{}}, map[string]string{"cards.0.card_type": "required"}},
+		{"unknown type", []map[string]any{{"card_type": "feeding_today"}}, map[string]string{"cards.0.card_type": "invalid"}},
+		{"parameter without id", []map[string]any{{"card_type": "tests_due"}, {"card_type": "parameter"}}, map[string]string{"cards.1.parameter_id": "required"}},
+		{"chart without id", []map[string]any{{"card_type": "parameter_chart"}}, map[string]string{"cards.0.parameter_id": "required"}},
+		{"disabled parameter", []map[string]any{{"card_type": "parameter", "parameter_id": off}}, map[string]string{"cards.0.parameter_id": "invalid"}},
+		{"other tank's parameter", []map[string]any{{"card_type": "parameter", "parameter_id": foreign}}, map[string]string{"cards.0.parameter_id": "invalid"}},
+		{"unknown parameter", []map[string]any{{"card_type": "parameter_chart", "parameter_id": 99999}}, map[string]string{"cards.0.parameter_id": "invalid"}},
+		{"tests_due with parameter", []map[string]any{{"card_type": "tests_due", "parameter_id": on}}, map[string]string{"cards.0.parameter_id": "invalid"}},
+		{"bad size", []map[string]any{{"card_type": "tests_due", "size": "huge"}}, map[string]string{"cards.0.size": "invalid"}},
+		{"options not an object", []map[string]any{{"card_type": "tests_due", "options": []int{1}}}, map[string]string{"cards.0.options": "invalid"}},
+		{"options a string", []map[string]any{{"card_type": "tests_due", "options": "x"}}, map[string]string{"cards.0.options": "invalid"}},
+		{"options too big", []map[string]any{{"card_type": "tests_due", "options": longOptions}}, map[string]string{"cards.0.options": "too_long"}},
+		{"duplicate tests_due", []map[string]any{{"card_type": "tests_due"}, {"card_type": "tests_due"}}, map[string]string{"cards.1": "invalid"}},
 		{"duplicate parameter", []map[string]any{
 			{"card_type": "parameter", "parameter_id": on}, {"card_type": "parameter_chart", "parameter_id": on}, {"card_type": "parameter", "parameter_id": on},
-		}, map[string]string{"cards.2": "duplicates cards.0"}},
+		}, map[string]string{"cards.2": "invalid"}},
 		{"several problems at once", []map[string]any{
 			{"card_type": "nope"}, {"card_type": "parameter"}, {"card_type": "tests_due", "size": "tiny"},
 		}, map[string]string{
-			"cards.0.card_type":    "must be one of parameter, parameter_chart, tests_due",
-			"cards.1.parameter_id": "is required for this card type",
-			"cards.2.size":         "must be one of normal, wide",
+			"cards.0.card_type":    "invalid",
+			"cards.1.parameter_id": "required",
+			"cards.2.size":         "invalid",
 		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			body := map[string]any{"cards": c.cards}
 			rec := e.do(userA, http.MethodPut, dashPath(tank, ""), body)
-			got := e.fail(rec, http.StatusUnprocessableEntity, "validation")
+			got := testutil.ExpectError(e.t, rec, http.StatusUnprocessableEntity, "validation").Error.Fields
 			if !reflect.DeepEqual(got, c.want) {
 				t.Errorf("fields = %v, want %v", got, c.want)
 			}
@@ -210,14 +212,14 @@ func TestReplaceRejectsMalformedBodies(t *testing.T) {
 	tank := e.tank("Display")
 
 	rec := e.do(userA, http.MethodPut, dashPath(tank, ""), map[string]any{"cards": []map[string]any{{"card_type": "tests_due", "colour": "red"}}})
-	e.fail(rec, http.StatusUnprocessableEntity, "validation")
+	testutil.ExpectError(e.t, rec, http.StatusUnprocessableEntity, "validation")
 	rec = e.do(userA, http.MethodPut, dashPath(tank, ""), map[string]any{"cards": []map[string]any{{"card_type": "tests_due", "size": 3}}})
-	e.fail(rec, http.StatusUnprocessableEntity, "validation")
+	testutil.ExpectError(e.t, rec, http.StatusUnprocessableEntity, "validation")
 	rec = e.do(userA, http.MethodPut, dashPath(tank, ""), map[string]any{"cards": "all of them"})
-	e.fail(rec, http.StatusUnprocessableEntity, "validation")
+	testutil.ExpectError(e.t, rec, http.StatusUnprocessableEntity, "validation")
 	rec = e.do(userA, http.MethodPut, dashPath(tank, ""), map[string]any{"extra": 1, "cards": []map[string]any{{"card_type": "tests_due"}}})
-	e.fail(rec, http.StatusUnprocessableEntity, "validation")
-	e.fail(e.do(userA, http.MethodPut, dashPath(tank, ""), nil), http.StatusUnsupportedMediaType, "unsupported_media_type")
+	testutil.ExpectError(e.t, rec, http.StatusUnprocessableEntity, "validation")
+	testutil.ExpectError(e.t, e.do(userA, http.MethodPut, dashPath(tank, ""), nil), http.StatusUnsupportedMediaType, "unsupported_media_type")
 }
 
 func TestResetRestoresTheDefault(t *testing.T) {
@@ -233,27 +235,27 @@ func TestResetRestoresTheDefault(t *testing.T) {
 	e.enable(tank, b, true, 1)
 
 	rec := e.do(userA, http.MethodPost, dashPath(tank, "/reset"), nil)
-	e.status(rec, http.StatusOK)
-	got := decode[Layout](t, rec).Cards
+	testutil.ExpectStatus(e.t, rec, http.StatusOK)
+	got := testutil.Decode[Layout](t, rec).Cards
 	wantShape(t, got, "tests_due:-:normal", "parameter:"+id(a)+":normal", "parameter:"+id(b)+":normal")
 	if !reflect.DeepEqual(e.get(userA, tank), got) {
 		t.Error("GET after reset differs from the reset response")
 	}
-	if n := e.count(`SELECT COUNT(*) FROM dashboard_cards`); n != 3 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM dashboard_cards`); n != 3 {
 		t.Errorf("%d cards stored after reset, want 3", n)
 	}
 
 	// Reset on a user who never opened the dashboard also creates the default.
 	rec = e.do(userB, http.MethodPost, dashPath(tank, "/reset"), nil)
-	e.status(rec, http.StatusOK)
-	wantShape(t, decode[Layout](t, rec).Cards, "tests_due:-:normal", "parameter:"+id(a)+":normal", "parameter:"+id(b)+":normal")
+	testutil.ExpectStatus(e.t, rec, http.StatusOK)
+	wantShape(t, testutil.Decode[Layout](t, rec).Cards, "tests_due:-:normal", "parameter:"+id(a)+":normal", "parameter:"+id(b)+":normal")
 }
 
 func TestResetRefusesNonJSONBodies(t *testing.T) {
 	e := newEnv(t)
 	tank := e.tank("Display")
-	r := newRawRequest(e, http.MethodPost, dashPath(tank, "/reset"), "text/plain", "x")
-	e.fail(r, http.StatusUnsupportedMediaType, "unsupported_media_type")
+	r := testutil.DoRaw(e.t, e.mux, http.MethodPost, dashPath(tank, "/reset"), "text/plain", "x", testutil.AsUser(userA, httpx.RoleMember))
+	testutil.ExpectError(e.t, r, http.StatusUnsupportedMediaType, "unsupported_media_type")
 }
 
 func TestEachUserHasTheirOwnLayoutPerTank(t *testing.T) {
@@ -274,7 +276,7 @@ func TestEachUserHasTheirOwnLayoutPerTank(t *testing.T) {
 
 	// Another user's replace and reset leave the first user's layout alone.
 	e.put(userB, t1, []map[string]any{{"card_type": "tests_due", "size": "wide"}})
-	e.status(e.do(userB, http.MethodPost, dashPath(t1, "/reset"), nil), http.StatusOK)
+	testutil.ExpectStatus(e.t, e.do(userB, http.MethodPost, dashPath(t1, "/reset"), nil), http.StatusOK)
 	e.put(userB, t1, []map[string]any{{"card_type": "tests_due"}})
 	wantShape(t, e.get(userA, t1), "parameter:"+id(p)+":wide")
 	wantShape(t, e.get(userB, t1), "tests_due:-:normal")
@@ -302,7 +304,7 @@ func TestWhatGetShowsCanAlwaysBePutBackAfterAParameterIsArchived(t *testing.T) {
 	e.enable(tank, b, true, 1)
 	e.get(userA, tank)
 
-	e.exec(`UPDATE parameter_definitions SET archived_at = '2026-01-01T00:00:00Z' WHERE id = ?`, b)
+	testutil.Exec(e.t, e.db, `UPDATE parameter_definitions SET archived_at = '2026-01-01T00:00:00Z' WHERE id = ?`, b)
 	shown := e.get(userA, tank)
 	wantShape(t, shown, "tests_due:-:normal", "parameter:"+id(a)+":normal")
 
@@ -313,7 +315,7 @@ func TestWhatGetShowsCanAlwaysBePutBackAfterAParameterIsArchived(t *testing.T) {
 	wantShape(t, e.put(userA, tank, back), "tests_due:-:normal", "parameter:"+id(a)+":normal")
 
 	// The archived parameter's card was kept and returns with the parameter.
-	e.exec(`UPDATE parameter_definitions SET archived_at = NULL WHERE id = ?`, b)
+	testutil.Exec(e.t, e.db, `UPDATE parameter_definitions SET archived_at = NULL WHERE id = ?`, b)
 	wantShape(t, e.get(userA, tank), "tests_due:-:normal", "parameter:"+id(a)+":normal", "parameter:"+id(b)+":normal")
 }
 
@@ -346,7 +348,7 @@ func TestReplaceKeepsHiddenCardsAfterTheShownOnesInTheirOrder(t *testing.T) {
 	if string(got[2].Options) != `{"unit":"dkh"}` {
 		t.Errorf("the kept card lost its options: %s", got[2].Options)
 	}
-	if n := e.count(`SELECT COUNT(*) FROM dashboard_cards`); n != 4 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM dashboard_cards`); n != 4 {
 		t.Errorf("%d cards stored, want 4", n)
 	}
 }
@@ -360,11 +362,11 @@ func TestEveryCardHiddenGivesAnEmptyListWithoutReseeding(t *testing.T) {
 
 	e.enable(tank, a, false, 0)
 	rec := e.do(userA, http.MethodGet, dashPath(tank, ""), nil)
-	e.status(rec, http.StatusOK)
+	testutil.ExpectStatus(e.t, rec, http.StatusOK)
 	if body := strings.TrimSpace(rec.Body.String()); body != `{"cards":[]}` {
 		t.Errorf("body = %s, want an empty list", body)
 	}
-	if n := e.count(`SELECT COUNT(*) FROM dashboard_cards`); n != 1 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM dashboard_cards`); n != 1 {
 		t.Errorf("%d cards stored, want the hidden one only", n)
 	}
 
@@ -374,7 +376,7 @@ func TestEveryCardHiddenGivesAnEmptyListWithoutReseeding(t *testing.T) {
 	wantShape(t, e.get(userA, tank), "tests_due:-:normal", "parameter:"+id(a)+":normal")
 }
 
-func TestMissingTankAndSignIn(t *testing.T) {
+func TestMissingTank(t *testing.T) {
 	e := newEnv(t)
 	tank := e.tank("Display")
 	for _, c := range []struct {
@@ -385,12 +387,11 @@ func TestMissingTankAndSignIn(t *testing.T) {
 		{http.MethodPut, "", map[string]any{"cards": []map[string]any{{"card_type": "tests_due"}}}},
 		{http.MethodPost, "/reset", nil},
 	} {
-		e.fail(e.do(userA, c.method, dashPath(tank+100, c.suffix), c.body), http.StatusNotFound, "not_found")
-		e.fail(e.do(userA, c.method, "/api/v1/tanks/abc/dashboard"+c.suffix, c.body), http.StatusNotFound, "not_found")
-		e.fail(e.do(userA, c.method, "/api/v1/tanks/0/dashboard"+c.suffix, c.body), http.StatusNotFound, "not_found")
-		e.fail(e.do(0, c.method, dashPath(tank, c.suffix), c.body), http.StatusUnauthorized, "unauthorized")
+		testutil.ExpectError(e.t, e.do(userA, c.method, dashPath(tank+100, c.suffix), c.body), http.StatusNotFound, "not_found")
+		testutil.ExpectError(e.t, e.do(userA, c.method, "/api/v1/tanks/abc/dashboard"+c.suffix, c.body), http.StatusNotFound, "not_found")
+		testutil.ExpectError(e.t, e.do(userA, c.method, "/api/v1/tanks/0/dashboard"+c.suffix, c.body), http.StatusNotFound, "not_found")
 	}
-	if n := e.count(`SELECT COUNT(*) FROM dashboard_cards`); n != 0 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM dashboard_cards`); n != 0 {
 		t.Errorf("%d cards written for failed requests", n)
 	}
 }
@@ -399,8 +400,8 @@ func TestDeletingATankRemovesItsCards(t *testing.T) {
 	e := newEnv(t)
 	tank := e.tank("Display")
 	e.get(userA, tank)
-	e.exec(`DELETE FROM tanks WHERE id = ?`, tank)
-	if n := e.count(`SELECT COUNT(*) FROM dashboard_cards`); n != 0 {
+	testutil.Exec(e.t, e.db, `DELETE FROM tanks WHERE id = ?`, tank)
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM dashboard_cards`); n != 0 {
 		t.Errorf("%d cards survived the tank", n)
 	}
 }

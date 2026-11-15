@@ -54,7 +54,9 @@ export async function createTank(
 
 /** Archives every active tank, so the instance looks like one that has never had a tank. */
 export async function archiveAllTanks(request: APIRequestContext): Promise<void> {
-  const tanks = (await (await request.get('/api/v1/tanks')).json()) as { id: number }[];
+  const { items: tanks } = (await (await request.get('/api/v1/tanks')).json()) as {
+    items: { id: number }[];
+  };
   for (const tank of tanks) await expectOk(await request.post(`/api/v1/tanks/${tank.id}/archive`));
 }
 

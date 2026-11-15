@@ -1,9 +1,10 @@
 <script lang="ts">
+  import type { ChartPoint } from './data.js';
   import { chart } from './uplot.js';
 
   interface Props {
-    /** [unix seconds, value] pairs, oldest first. */
-    points: [number, number][];
+    /** Oldest first. */
+    points: ChartPoint[];
     low: number | null;
     high: number | null;
     /** Accessible description; without one the sparkline is hidden from assistive technology. */
@@ -12,12 +13,7 @@
 
   let { points, low, high, label }: Props = $props();
 
-  const params = $derived({
-    points: points.map(([t, v]) => ({ t, v, note: '' })),
-    low,
-    high,
-    variant: 'spark' as const
-  });
+  const params = $derived({ points, low, high, variant: 'spark' as const });
 </script>
 
 <div

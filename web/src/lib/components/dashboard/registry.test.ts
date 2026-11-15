@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { buildRegistry, cardKinds, labelFor, registry, type CardModule } from './registry.js';
+import type { CardKind } from './cards.js';
+import { buildRegistry, cardKinds, labelFor, registry } from './registry.js';
 
-const fake = (cardType: string): CardModule => ({
-  default: (() => {}) as unknown as CardModule['default'],
+const fake = (cardType: string): CardKind => ({
+  default: (() => {}) as unknown as CardKind['default'],
   cardType,
   needsParameter: false,
   cardLabel: () => cardType
@@ -14,7 +15,7 @@ describe('registry', () => {
     expect(registry.parameter.needsParameter).toBe(true);
     expect(registry.parameter_chart.needsParameter).toBe(true);
     expect(registry.tests_due.needsParameter).toBe(false);
-    for (const kind of cardKinds) expect(kind.component).toBeTypeOf('function');
+    for (const kind of cardKinds) expect(kind.default).toBeTypeOf('function');
   });
 
   it('labels cards by kind and falls back to the raw type for an unknown one', () => {

@@ -69,7 +69,11 @@ describe('reorderChanges', () => {
 describe('parameterChanges', () => {
   it('is empty for an untouched draft', () => {
     const p = parameter();
-    expect(parameterChanges(p, draftFromParameter(p))).toEqual({ changes: {}, problems: {} });
+    expect(parameterChanges(p, draftFromParameter(p))).toEqual({
+      changes: {},
+      errors: {},
+      schedule: []
+    });
   });
 
   it('sends changed limits as numbers, reading a decimal comma, and clears an emptied one', () => {
@@ -91,18 +95,18 @@ describe('parameterChanges', () => {
 
   it('reports limits that are not numbers, a reversed range and an incomplete schedule', () => {
     const p = parameter();
-    expect(parameterChanges(p, { ...draftFromParameter(p), low: 'x' }).problems.low).toBe(
-      'invalid_number'
-    );
-    expect(parameterChanges(p, { ...draftFromParameter(p), high: '1,x' }).problems.high).toBe(
-      'invalid_number'
-    );
-    expect(parameterChanges(p, { ...draftFromParameter(p), low: '9' }).problems.range).toBe(
-      'low_above_high'
-    );
+    expect(parameterChanges(p, { ...draftFromParameter(p), low: 'x' }).errors).toEqual({
+      ideal_low: 'invalid'
+    });
+    expect(parameterChanges(p, { ...draftFromParameter(p), high: '1,x' }).errors).toEqual({
+      ideal_high: 'invalid'
+    });
+    expect(parameterChanges(p, { ...draftFromParameter(p), low: '9' }).errors).toEqual({
+      range: 'out_of_range'
+    });
     const schedule = { ...after7, interval_days: null };
-    expect(parameterChanges(p, { ...draftFromParameter(p), schedule }).problems.schedule).toEqual([
-      'interval_days'
-    ]);
+    const edit = parameterChanges(p, { ...draftFromParameter(p), schedule });
+    expect(edit.schedule).toEqual(['interval_days']);
+    expect(edit.changes).toEqual({});
   });
 });

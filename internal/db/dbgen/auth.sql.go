@@ -11,18 +11,17 @@ import (
 
 const advanceTOTPStep = `-- name: AdvanceTOTPStep :execrows
 UPDATE user_totp
-SET last_used_step = ?
-WHERE user_id = ? AND confirmed_at IS NOT NULL AND last_used_step < ?
+SET last_used_step = ?1
+WHERE user_id = ?2 AND confirmed_at IS NOT NULL AND last_used_step < ?1
 `
 
 type AdvanceTOTPStepParams struct {
-	LastUsedStep   int64
-	UserID         int64
-	LastUsedStep_2 int64
+	Step   int64
+	UserID int64
 }
 
 func (q *Queries) AdvanceTOTPStep(ctx context.Context, arg AdvanceTOTPStepParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, advanceTOTPStep, arg.LastUsedStep, arg.UserID, arg.LastUsedStep_2)
+	result, err := q.db.ExecContext(ctx, advanceTOTPStep, arg.Step, arg.UserID)
 	if err != nil {
 		return 0, err
 	}
@@ -305,6 +304,43 @@ func (q *Queries) ListUserSessions(ctx context.Context, arg ListUserSessionsPara
 		return nil, err
 	}
 	return items, nil
+}
+
+const rehashPassword = `-- name: RehashPassword :execrows
+UPDATE users
+SET password_hash = ?1
+WHERE id = ?2 AND password_hash = ?3
+`
+
+type RehashPasswordParams struct {
+	NewHash *string
+	ID      int64
+	OldHash *string
+}
+
+func (q *Queries) RehashPassword(ctx context.Context, arg RehashPasswordParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, rehashPassword, arg.NewHash, arg.ID, arg.OldHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setUserPassword = `-- name: SetUserPassword :exec
+UPDATE users
+SET password_hash = ?1, password_changed_at = CAST(?2 AS TEXT), updated_at = ?2
+WHERE id = ?3
+`
+
+type SetUserPasswordParams struct {
+	PasswordHash *string
+	Now          string
+	ID           int64
+}
+
+func (q *Queries) SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error {
+	_, err := q.db.ExecContext(ctx, setUserPassword, arg.PasswordHash, arg.Now, arg.ID)
+	return err
 }
 
 const startTOTPEnrollment = `-- name: StartTOTPEnrollment :execrows

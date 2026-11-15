@@ -25,7 +25,7 @@ func DefaultDueTime() TimeOfDay { return TimeOfDay{Hour: 9} }
 func ParseDate(s string) (Date, error) {
 	t, err := time.Parse(time.DateOnly, s)
 	if err != nil {
-		return Date{}, fmt.Errorf("parse date %q: %w", s, ErrInvalid)
+		return Date{}, invalid(codeInvalid, "parse date %q", s)
 	}
 	return Date{t.Year(), t.Month(), t.Day()}, nil
 }
@@ -40,7 +40,7 @@ func DateOf(t time.Time, loc *time.Location) Date {
 func ParseTimeOfDay(s string) (TimeOfDay, error) {
 	t, err := time.Parse("15:04", s)
 	if err != nil || len(s) != len("15:04") {
-		return TimeOfDay{}, fmt.Errorf("parse time of day %q: %w", s, ErrInvalid)
+		return TimeOfDay{}, invalid(codeInvalid, "parse time of day %q", s)
 	}
 	return TimeOfDay{t.Hour(), t.Minute()}, nil
 }

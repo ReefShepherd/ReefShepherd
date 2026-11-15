@@ -37,7 +37,7 @@ describe('appendPage', () => {
   it('adds a page after the rows shown and skips rows already there', () => {
     const shown = [result(5, '2026-10-05T10:00:00Z'), result(4, '2026-10-04T10:00:00Z')];
     const page = {
-      results: [result(4, '2026-10-04T10:00:00Z'), result(3, '2026-10-03T10:00:00Z')],
+      items: [result(4, '2026-10-04T10:00:00Z'), result(3, '2026-10-03T10:00:00Z')],
       next_cursor: null
     };
     expect(ids(appendPage(shown, page))).toEqual([5, 4, 3]);

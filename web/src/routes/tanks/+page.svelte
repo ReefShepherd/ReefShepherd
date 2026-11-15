@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { errorText } from '#lib/api/error-text.js';
+  import { tankPath } from '#lib/api/tank-id.js';
   import { tanksApi, type Tank } from '#lib/api/tanks.js';
   import Alert from '#lib/components/forms/Alert.svelte';
   import ConfirmButton from '#lib/components/forms/ConfirmButton.svelte';
@@ -96,10 +97,10 @@
     <p class="hint">{details(tank)}</p>
     <div class="row">
       {#if !tank.archived_at}
-        <a class="btn" href="/tanks/{tank.id}/tests">{m.nav_tests()}</a>
-        <a class="btn" href="/tanks/{tank.id}/charts">{m.nav_charts()}</a>
+        <a class="btn" href={tankPath(tank.id, 'tests')}>{m.nav_tests()}</a>
+        <a class="btn" href={tankPath(tank.id, 'charts')}>{m.nav_charts()}</a>
       {/if}
-      <a class="btn" href="/tanks/{tank.id}/settings">
+      <a class="btn" href={tankPath(tank.id, 'settings')}>
         {m.tanks_settings()}<span class="sr-only"> {tank.name}</span>
       </a>
       {#if tank.archived_at}

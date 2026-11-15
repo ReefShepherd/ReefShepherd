@@ -12,7 +12,7 @@ import (
 
 func TestWriteErrorFormat(t *testing.T) {
 	rec := httptest.NewRecorder()
-	WriteError(rec, Validation("invalid input", map[string]string{"value": "required"}))
+	WriteError(rec, Validation(FieldErrors{Message: "invalid input", codes: map[string]Code{"value": CodeRequired}}))
 
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Errorf("status = %d", rec.Code)
@@ -77,7 +77,7 @@ func TestDecodeJSON(t *testing.T) {
 		body        string
 		wantStatus  int
 		wantCode    string
-		wantField   string
+		wantField   string // the field that must be refused with CodeInvalid
 	}{
 		{"ok", "application/json", `{"name":"a","count":2}`, 0, "", ""},
 		{"ok with charset and trailing newline", "application/json; charset=utf-8", "{\"name\":\"a\"}\n", 0, "", ""},
@@ -109,8 +109,8 @@ func TestDecodeJSON(t *testing.T) {
 				t.Errorf("got %d %s (%s), want %d %s", apiErr.Status, apiErr.Code, apiErr.Message, tt.wantStatus, tt.wantCode)
 			}
 			if tt.wantField != "" {
-				if _, ok := apiErr.Fields[tt.wantField]; !ok {
-					t.Errorf("fields = %v, want key %q", apiErr.Fields, tt.wantField)
+				if apiErr.Fields[tt.wantField] != string(CodeInvalid) {
+					t.Errorf("fields = %v, want %q: %q", apiErr.Fields, tt.wantField, CodeInvalid)
 				}
 			}
 		})

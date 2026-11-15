@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { page } from '$app/state';
   import { errorText } from '#lib/api/error-text.js';
   import { paramsApi, type TankParameters, type TestResult } from '#lib/api/params.js';
+  import { tankPath } from '#lib/api/tank-id.js';
   import Alert from '#lib/components/forms/Alert.svelte';
   import PageTitle from '#lib/components/shell/PageTitle.svelte';
   import ResultsHistory from '#lib/components/tanks/ResultsHistory.svelte';
@@ -9,11 +9,13 @@
   import { m } from '#lib/paraglide/messages.js';
   import { useOpenTank } from '#lib/tank/open-tank.js';
   import { orderParameters } from '#lib/tank/parameter-settings.js';
+  import type { PageProps } from './$types';
 
-  const id = $derived(page.params.id ?? '');
+  let { data }: PageProps = $props();
+  const id = $derived(data.tankId);
 
   const open = useOpenTank();
-  const tankName = $derived(open.tank && String(open.tank.id) === id ? open.tank.name : undefined);
+  const tankName = $derived(open.tank && open.tank.id === id ? open.tank.name : undefined);
 
   let loaded = $state<TankParameters | null>(null);
   let failure = $state('');
@@ -61,7 +63,7 @@
       {#if enabled.length === 0}
         <Alert kind="warning">
           {m.tests_no_parameters()}
-          <a href="/tanks/{loaded.tank_id}/settings">{m.tests_choose_parameters()}</a>
+          <a href={tankPath(loaded.tank_id, 'settings')}>{m.tests_choose_parameters()}</a>
         </Alert>
       {:else}
         <TestEntryForm

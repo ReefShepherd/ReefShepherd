@@ -11,6 +11,7 @@ import (
 	"github.com/reefshepherd/reefshepherd/internal/app"
 	"github.com/reefshepherd/reefshepherd/internal/auth/password"
 	"github.com/reefshepherd/reefshepherd/internal/db"
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 )
 
 var testHasher = password.NewHasher(password.Params{Time: 1, MemoryKiB: 64, Threads: 1})
@@ -25,31 +26,7 @@ type adminFixture struct {
 func newAdminFixture(t *testing.T) *adminFixture {
 	t.Helper()
 	dir := t.TempDir()
-	d, err := db.Open(filepath.Join(dir, app.DBFileName))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = d.Close() })
-	if err := d.Migrate(t.Context(), filepath.Join(dir, "backups")); err != nil {
-		t.Fatal(err)
-	}
-	return &adminFixture{t: t, dir: dir, db: d}
-}
-
-func (f *adminFixture) exec(q string, args ...any) {
-	f.t.Helper()
-	if _, err := f.db.W.ExecContext(f.t.Context(), q, args...); err != nil {
-		f.t.Fatalf("%s: %v", q, err)
-	}
-}
-
-func (f *adminFixture) count(q string, args ...any) int {
-	f.t.Helper()
-	var n int
-	if err := f.db.R.QueryRowContext(f.t.Context(), q, args...).Scan(&n); err != nil {
-		f.t.Fatalf("%s: %v", q, err)
-	}
-	return n
+	return &adminFixture{t: t, dir: dir, db: testutil.OpenDBAt(t, filepath.Join(dir, app.DBFileName))}
 }
 
 func (f *adminFixture) addUser(id int64, username, role, pw string) {
@@ -62,12 +39,12 @@ func (f *adminFixture) addUser(id int64, username, role, pw string) {
 		}
 		hash = h
 	}
-	f.exec(`INSERT INTO users (id, username, role, password_hash, display_name) VALUES (?, ?, ?, ?, ?)`, id, username, role, hash, strings.ToUpper(username[:1])+username[1:])
+	testutil.Exec(f.t, f.db, `INSERT INTO users (id, username, role, password_hash, display_name) VALUES (?, ?, ?, ?, ?)`, id, username, role, hash, strings.ToUpper(username[:1])+username[1:])
 }
 
 func (f *adminFixture) addSession(userID int64, tokenByte byte) {
 	f.t.Helper()
-	f.exec(`INSERT INTO sessions (token_hash, user_id, stage, auth_method, expires_at) VALUES (?, ?, 'active', 'password', '2999-01-01T00:00:00Z')`, []byte{tokenByte}, userID)
+	testutil.Exec(f.t, f.db, `INSERT INTO sessions (token_hash, user_id, stage, auth_method, expires_at) VALUES (?, ?, 'active', 'password', '2999-01-01T00:00:00Z')`, []byte{tokenByte}, userID)
 }
 
 func (f *adminFixture) setting(key string) string {
@@ -128,7 +105,7 @@ func TestAdminSetAuthModeRefusesToLockEveryoneOut(t *testing.T) {
 	if code, _, errOut := f.admin("set-auth-mode", "oidc"); code != 1 || errOut == "" {
 		t.Errorf("unknown mode: code=%d err=%q", code, errOut)
 	}
-	f.exec(`DELETE FROM users`)
+	testutil.Exec(f.t, f.db, `DELETE FROM users`)
 	if code, _, _ := f.admin("set-auth-mode", "disabled"); code != 1 {
 		t.Errorf("disabling with no users: code=%d", code)
 	}
@@ -198,16 +175,16 @@ func TestAdminResetPassword(t *testing.T) {
 	if strings.Contains(hash, pw) {
 		t.Error("password stored in the clear")
 	}
-	if f.count(`SELECT COUNT(*) FROM users WHERE id = 1 AND password_changed_at IS NOT NULL`) != 1 {
+	if testutil.Count(f.t, f.db, `SELECT COUNT(*) FROM users WHERE id = 1 AND password_changed_at IS NOT NULL`) != 1 {
 		t.Error("password_changed_at not set")
 	}
-	if f.count(`SELECT COUNT(*) FROM sessions WHERE user_id = 1`) != 0 {
+	if testutil.Count(f.t, f.db, `SELECT COUNT(*) FROM sessions WHERE user_id = 1`) != 0 {
 		t.Error("the user's sessions survived")
 	}
-	if f.count(`SELECT COUNT(*) FROM sessions WHERE user_id = 2`) != 1 {
+	if testutil.Count(f.t, f.db, `SELECT COUNT(*) FROM sessions WHERE user_id = 2`) != 1 {
 		t.Error("another user's session was ended")
 	}
-	if f.count(`SELECT COUNT(*) FROM users WHERE id = 2 AND password_hash LIKE '$argon2id%'`) != 1 {
+	if testutil.Count(f.t, f.db, `SELECT COUNT(*) FROM users WHERE id = 2 AND password_hash LIKE '$argon2id%'`) != 1 {
 		t.Error("another user's password changed")
 	}
 
@@ -221,16 +198,16 @@ func TestAdminResetPasswordWorksForDisabledAndPasswordlessAccounts(t *testing.T)
 	f := newAdminFixture(t)
 	f.addUser(1, "nopass", "admin", "")
 	f.addUser(2, "off", "member", goodPassword)
-	f.exec(`UPDATE users SET disabled = 1 WHERE id = 2`)
+	testutil.Exec(f.t, f.db, `UPDATE users SET disabled = 1 WHERE id = 2`)
 	for _, name := range []string{"nopass", "off"} {
 		if code, out, errOut := f.admin("reset-password", name); code != 0 || newPasswordLine.FindStringSubmatch(out) == nil {
 			t.Errorf("%s: code=%d out=%q err=%q", name, code, out, errOut)
 		}
 	}
-	if f.count(`SELECT COUNT(*) FROM users WHERE password_hash IS NULL`) != 0 {
+	if testutil.Count(f.t, f.db, `SELECT COUNT(*) FROM users WHERE password_hash IS NULL`) != 0 {
 		t.Error("a password was not stored")
 	}
-	if f.count(`SELECT COUNT(*) FROM users WHERE id = 2 AND disabled = 1`) != 1 {
+	if testutil.Count(f.t, f.db, `SELECT COUNT(*) FROM users WHERE id = 2 AND disabled = 1`) != 1 {
 		t.Error("resetting a password must not re-enable the account")
 	}
 }
@@ -249,21 +226,21 @@ func TestAdminResetMFA(t *testing.T) {
 	f.addUser(1, "alice", "admin", goodPassword)
 	f.addUser(2, "bob", "member", goodPassword)
 	for _, id := range []int{1, 2} {
-		f.exec(`INSERT INTO user_totp (user_id, secret, confirmed_at) VALUES (?, 'JBSWY3DPEHPK3PXP', '2026-01-01T00:00:00Z')`, id)
-		f.exec(`INSERT INTO user_recovery_codes (user_id, code_hash) VALUES (?, 'abc')`, id)
+		testutil.Exec(f.t, f.db, `INSERT INTO user_totp (user_id, secret, confirmed_at) VALUES (?, 'JBSWY3DPEHPK3PXP', '2026-01-01T00:00:00Z')`, id)
+		testutil.Exec(f.t, f.db, `INSERT INTO user_recovery_codes (user_id, code_hash) VALUES (?, 'abc')`, id)
 		f.addSession(int64(id), byte(id))
 	}
 	code, out, errOut := f.admin("reset-mfa", "alice")
 	if code != 0 || !strings.Contains(out, "alice") {
 		t.Fatalf("code=%d out=%q err=%q", code, out, errOut)
 	}
-	if f.count(`SELECT COUNT(*) FROM user_totp WHERE user_id = 1`) != 0 || f.count(`SELECT COUNT(*) FROM user_recovery_codes WHERE user_id = 1`) != 0 {
+	if testutil.Count(f.t, f.db, `SELECT COUNT(*) FROM user_totp WHERE user_id = 1`) != 0 || testutil.Count(f.t, f.db, `SELECT COUNT(*) FROM user_recovery_codes WHERE user_id = 1`) != 0 {
 		t.Error("alice's two-step login survived")
 	}
-	if f.count(`SELECT COUNT(*) FROM sessions WHERE user_id = 1`) != 0 {
+	if testutil.Count(f.t, f.db, `SELECT COUNT(*) FROM sessions WHERE user_id = 1`) != 0 {
 		t.Error("alice's sessions survived")
 	}
-	if f.count(`SELECT COUNT(*) FROM user_totp WHERE user_id = 2`) != 1 || f.count(`SELECT COUNT(*) FROM user_recovery_codes WHERE user_id = 2`) != 1 || f.count(`SELECT COUNT(*) FROM sessions WHERE user_id = 2`) != 1 {
+	if testutil.Count(f.t, f.db, `SELECT COUNT(*) FROM user_totp WHERE user_id = 2`) != 1 || testutil.Count(f.t, f.db, `SELECT COUNT(*) FROM user_recovery_codes WHERE user_id = 2`) != 1 || testutil.Count(f.t, f.db, `SELECT COUNT(*) FROM sessions WHERE user_id = 2`) != 1 {
 		t.Error("bob was affected")
 	}
 	// Running it again for an account without two-step login is fine.
@@ -279,8 +256,8 @@ func TestAdminListUsers(t *testing.T) {
 	f := newAdminFixture(t)
 	f.addUser(1, "alice", "admin", goodPassword)
 	f.addUser(2, "bob", "member", "")
-	f.exec(`UPDATE users SET disabled = 1 WHERE id = 2`)
-	f.exec(`INSERT INTO user_totp (user_id, secret, confirmed_at) VALUES (1, 'JBSWY3DPEHPK3PXP', '2026-01-01T00:00:00Z')`)
+	testutil.Exec(f.t, f.db, `UPDATE users SET disabled = 1 WHERE id = 2`)
+	testutil.Exec(f.t, f.db, `INSERT INTO user_totp (user_id, secret, confirmed_at) VALUES (1, 'JBSWY3DPEHPK3PXP', '2026-01-01T00:00:00Z')`)
 
 	code, out, errOut := f.admin("list-users")
 	if code != 0 || errOut != "" {
@@ -312,7 +289,7 @@ func TestAdminWorksWhileTheServerHoldsTheDatabase(t *testing.T) {
 	if code, _, errOut := f.admin("reset-password", "alice"); code != 0 {
 		t.Fatalf("code=%d err=%q", code, errOut)
 	}
-	if f.count(`SELECT COUNT(*) FROM users`) != 1 {
+	if testutil.Count(f.t, f.db, `SELECT COUNT(*) FROM users`) != 1 {
 		t.Error("the server's connection no longer sees the data")
 	}
 }
@@ -385,7 +362,7 @@ func TestAdminSetAuthModeIsAllOrNothing(t *testing.T) {
 	f := newAdminFixture(t)
 	f.addUser(1, "alice", "admin", goodPassword)
 	// The second write of the switch fails; the acting-user write before it must not stay behind.
-	f.exec(`CREATE TRIGGER fail_mode BEFORE INSERT ON settings WHEN NEW.key = 'auth_mode' BEGIN SELECT RAISE(ABORT, 'disk full'); END`)
+	testutil.Exec(f.t, f.db, `CREATE TRIGGER fail_mode BEFORE INSERT ON settings WHEN NEW.key = 'auth_mode' BEGIN SELECT RAISE(ABORT, 'disk full'); END`)
 	code, _, errOut := f.admin("set-auth-mode", "disabled")
 	if code != 1 || !strings.Contains(errOut, "disk full") {
 		t.Fatalf("code=%d err=%q", code, errOut)

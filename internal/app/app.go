@@ -51,7 +51,7 @@ type App struct {
 
 // New builds the route table, serving the embedded web UI, and wraps it in the middleware stack.
 func New(cfg config.Config, logger *slog.Logger, database *db.DB, store *settings.Store) (*App, error) {
-	return newWithUI(cfg, logger, database, store, webui.Handler())
+	return newWithUI(cfg, logger, database, store, webui.Handler(logger))
 }
 
 // newWithUI is New with the handler for non-API paths supplied by the caller.

@@ -1,7 +1,5 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { errorText } from '#lib/api/error-text.js';
-  import { fieldText } from '#lib/api/field-errors.js';
   import { paramsApi, type TankParameter, type TestResult } from '#lib/api/params.js';
   import Alert from '#lib/components/forms/Alert.svelte';
   import TextField from '#lib/components/forms/TextField.svelte';
@@ -10,6 +8,9 @@
   import { formatValue } from '#lib/format/number.js';
   import { fromLocalInput, toLocalInput } from '#lib/format/local-time.js';
   import { relativeTime } from '#lib/format/datetime.js';
+  import { hasErrors, type FieldErrors } from '#lib/forms/codes.js';
+  import { guarded } from '#lib/forms/guarded.js';
+  import { fieldTexts } from '#lib/forms/serverErrors.js';
   import { m } from '#lib/paraglide/messages.js';
   import { buildEntry, rowErrors, type EntryRow } from '#lib/results/entry.js';
 
@@ -43,20 +44,22 @@
   let measuredAt = $state(opened);
   // Until the person changes the time it is left out of the request, so the server stamps the moment of saving.
   let shownAt = opened;
-  // These three are keyed by parameter id.
+  // These are keyed by parameter id.
   let notesOpen = $state<Record<number, boolean>>({});
-  let valueErrors = $state<Record<number, string>>({});
-  let noteErrors = $state<Record<number, string>>({});
-  let timeError = $state<string>();
+  let rowErrs = $state<Record<number, FieldErrors>>({});
+  const rowTexts = $derived(
+    Object.fromEntries(Object.entries(rowErrs).map(([id, errs]) => [id, fieldTexts(errs)]))
+  );
+  let timeErrors = $state<FieldErrors>({});
+  const timeText = $derived(fieldTexts(timeErrors).measured_at);
   let failure = $state('');
   let notice = $state('');
   let busy = $state(false);
   let form = $state<HTMLFormElement>();
 
   function clearErrors() {
-    valueErrors = {};
-    noteErrors = {};
-    timeError = undefined;
+    rowErrs = {};
+    timeErrors = {};
     failure = '';
     notice = '';
   }
@@ -69,44 +72,46 @@
     if (measuredAt !== shownAt) {
       instant = fromLocalInput(measuredAt, timeZone);
       if (instant === null) {
-        timeError = m.tests_time_invalid();
+        timeErrors = { measured_at: 'invalid' };
         return focusFirstInvalid(form);
       }
     }
 
     const entry = buildEntry(rows, instant);
     const rowIds = rows.map((r) => r.parameterId);
-    for (const [index, problem] of Object.entries(entry.problems)) {
-      valueErrors[rowIds[Number(index)]] =
-        problem === 'invalid_number' ? m.value_invalid_number() : m.tests_value_needed();
+    for (const [index, errs] of Object.entries(entry.problems)) {
+      rowErrs[rowIds[Number(index)]] = errs;
     }
-    if (Object.keys(entry.problems).length > 0) return focusFirstInvalid(form);
+    if (hasErrors(entry.problems)) return focusFirstInvalid(form);
     if (entry.body === null) {
       failure = m.tests_nothing_entered();
       return;
     }
+    const body = entry.body;
 
-    busy = true;
-    try {
-      const saved = await paramsApi.createResults(tankId, entry.body);
-      rows = emptyRows();
-      notesOpen = {};
-      measuredAt = toLocalInput(new Date(), timeZone);
-      shownAt = measuredAt;
-      notice = m.tests_saved({ count: saved.length });
-      onsaved(saved);
-    } catch (e) {
-      const mapped = rowErrors(e, entry.sent);
-      for (const [index, errs] of Object.entries(mapped)) {
-        if (errs.value) valueErrors[rowIds[Number(index)]] = errs.value;
-        if (errs.note) noteErrors[rowIds[Number(index)]] = errs.note;
+    await guarded(
+      async () => {
+        const saved = await paramsApi.createResults(tankId, body);
+        rows = emptyRows();
+        notesOpen = {};
+        measuredAt = toLocalInput(new Date(), timeZone);
+        shownAt = measuredAt;
+        notice = m.tests_saved({ count: saved.length });
+        onsaved(saved);
+      },
+      {
+        failure: (text) => (failure = text),
+        busy: (b) => (busy = b),
+        fields: (fields) => {
+          for (const [index, errs] of Object.entries(rowErrors(fields, entry.sent))) {
+            rowErrs[rowIds[Number(index)]] = errs;
+          }
+          timeErrors = { measured_at: fields.measured_at };
+        },
+        shown: /^(measured_at|results\.\d+\.(value|note|parameter_id))$/,
+        form: () => form
       }
-      timeError = fieldText(e, 'measured_at');
-      if (Object.keys(mapped).length === 0 && timeError === undefined) failure = errorText(e);
-      await focusFirstInvalid(form);
-    } finally {
-      busy = false;
-    }
+    );
   }
 </script>
 
@@ -122,7 +127,7 @@
     label={m.tests_time()}
     type="datetime-local"
     bind:value={measuredAt}
-    error={timeError}
+    error={timeText}
   />
 
   <ul class="rows">
@@ -153,13 +158,15 @@
             hideLabel
             bind:value={row.value}
             unit={parameter.unit_label}
-            error={valueErrors[parameter.parameter_id]}
+            error={rowTexts[parameter.parameter_id]?.value ??
+              rowTexts[parameter.parameter_id]?.value_missing ??
+              rowTexts[parameter.parameter_id]?.parameter_id}
           />
-          {#if notesOpen[parameter.parameter_id] || row.note !== '' || noteErrors[parameter.parameter_id]}
+          {#if notesOpen[parameter.parameter_id] || row.note !== '' || rowTexts[parameter.parameter_id]?.note}
             <TextField
               label={m.tests_note_for({ name: parameter.name })}
               bind:value={row.note}
-              error={noteErrors[parameter.parameter_id]}
+              error={rowTexts[parameter.parameter_id]?.note}
               autocomplete="off"
             />
           {:else}

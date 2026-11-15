@@ -1,24 +1,20 @@
 package settings
 
 import (
+	"database/sql"
 	"errors"
-	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/reefshepherd/reefshepherd/internal/db"
+	"github.com/reefshepherd/reefshepherd/internal/httpx"
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 	"github.com/reefshepherd/reefshepherd/internal/units"
 )
 
 func newStore(t *testing.T) (*Store, *db.DB) {
 	t.Helper()
-	d, err := db.Open(filepath.Join(t.TempDir(), "reef.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = d.Close() })
-	if err := d.Migrate(t.Context(), filepath.Join(t.TempDir(), "backups")); err != nil {
-		t.Fatal(err)
-	}
+	d := testutil.OpenDB(t)
 	return NewStore(d), d
 }
 
@@ -63,7 +59,7 @@ func TestDefaultsWhenNothingIsStored(t *testing.T) {
 			t.Errorf("unit for %s = %q, %v; want %q", family, got, err, want)
 		}
 	}
-	if n := rowCount(t, d); n != 0 {
+	if n := testutil.Count(t, d, `SELECT COUNT(*) FROM settings`); n != 0 {
 		t.Errorf("reading defaults wrote %d rows", n)
 	}
 }
@@ -84,15 +80,6 @@ func TestSalinityDefaultsToSGAndPPTCanBeChosen(t *testing.T) {
 	if got, err := s.GetUnit(ctx, units.Salinity); err != nil || got != units.PPT {
 		t.Errorf("chosen salinity unit = %q, %v; want %q", got, err, units.PPT)
 	}
-}
-
-func rowCount(t *testing.T, d *db.DB) int {
-	t.Helper()
-	var n int
-	if err := d.R.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM settings`).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	return n
 }
 
 func TestSettersRoundTrip(t *testing.T) {
@@ -161,36 +148,49 @@ func TestSettersRoundTrip(t *testing.T) {
 	must(s.ClearAuthDisabledUserID(ctx))
 }
 
+func TestCodesAreOnTheAPIsClosedList(t *testing.T) {
+	if httpx.Code(codeRequired) != httpx.CodeRequired || httpx.Code(codeInvalid) != httpx.CodeInvalid {
+		t.Errorf("local codes %q and %q differ from the API's", codeRequired, codeInvalid)
+	}
+}
+
 func TestSettersRejectInvalidValues(t *testing.T) {
 	s, d := newStore(t)
 	ctx := t.Context()
 
-	cases := map[string]error{
-		"blank instance name":       s.SetInstanceName(ctx, "   "),
-		"unknown timezone":          s.SetTimezone(ctx, "Mars/Olympus"),
-		"empty timezone":            s.SetTimezone(ctx, ""),
-		"Local timezone":            s.SetTimezone(ctx, "Local"),
-		"unknown auth mode":         s.SetAuthMode(ctx, "ldap"),
-		"zero user id":              s.SetAuthDisabledUserID(ctx, 0),
-		"negative user id":          s.SetAuthDisabledUserID(ctx, -3),
-		"hour without leading zero": s.SetReminderDefaultTime(ctx, "9:00"),
-		"hour out of range":         s.SetReminderDefaultTime(ctx, "24:00"),
-		"minute out of range":       s.SetReminderDefaultTime(ctx, "09:60"),
-		"time with seconds":         s.SetReminderDefaultTime(ctx, "09:00:00"),
-		"fahrenheit for salinity":   s.SetUnit(ctx, units.Salinity, units.Fahrenheit),
-		"unknown unit":              s.SetUnit(ctx, units.Volume, units.Unit("gallon")),
-		"fixed family":              s.SetUnit(ctx, units.Fixed, units.None),
-		"unknown family":            s.SetUnit(ctx, units.Family("pressure"), units.PPM),
+	cases := []struct {
+		name        string
+		err         error
+		field, code string
+	}{
+		{"blank instance name", s.SetInstanceName(ctx, "   "), "instance_name", "required"},
+		{"unknown timezone", s.SetTimezone(ctx, "Mars/Olympus"), "timezone", "invalid"},
+		{"empty timezone", s.SetTimezone(ctx, ""), "timezone", "invalid"},
+		{"Local timezone", s.SetTimezone(ctx, "Local"), "timezone", "invalid"},
+		{"unknown auth mode", s.SetAuthMode(ctx, "ldap"), "auth_mode", "invalid"},
+		{"zero user id", s.SetAuthDisabledUserID(ctx, 0), "auth_disabled_user_id", "invalid"},
+		{"negative user id", s.SetAuthDisabledUserID(ctx, -3), "auth_disabled_user_id", "invalid"},
+		{"hour without leading zero", s.SetReminderDefaultTime(ctx, "9:00"), "reminder_default_time", "invalid"},
+		{"hour out of range", s.SetReminderDefaultTime(ctx, "24:00"), "reminder_default_time", "invalid"},
+		{"minute out of range", s.SetReminderDefaultTime(ctx, "09:60"), "reminder_default_time", "invalid"},
+		{"time with seconds", s.SetReminderDefaultTime(ctx, "09:00:00"), "reminder_default_time", "invalid"},
+		{"fahrenheit for salinity", s.SetUnit(ctx, units.Salinity, units.Fahrenheit), "units.salinity", "invalid"},
+		{"unknown unit", s.SetUnit(ctx, units.Volume, units.Unit("gallon")), "units.volume", "invalid"},
+		{"fixed family", s.SetUnit(ctx, units.Fixed, units.None), "units.fixed", "invalid"},
+		{"unknown family", s.SetUnit(ctx, units.Family("pressure"), units.PPM), "units.pressure", "invalid"},
 	}
-	for name, err := range cases {
-		if !errors.Is(err, ErrInvalid) {
-			t.Errorf("%s: err = %v, want ErrInvalid", name, err)
+	for _, c := range cases {
+		if !errors.Is(c.err, ErrInvalid) {
+			t.Errorf("%s: err = %v, want ErrInvalid", c.name, c.err)
+		}
+		if got := fieldCodes(c.err); len(got) != 1 || got[c.field] != c.code {
+			t.Errorf("%s: field errors = %v, want %s: %s", c.name, got, c.field, c.code)
 		}
 	}
 	if _, err := s.GetUnit(ctx, units.Fixed); !errors.Is(err, ErrInvalid) {
 		t.Errorf("GetUnit(fixed) err = %v, want ErrInvalid", err)
 	}
-	if n := rowCount(t, d); n != 0 {
+	if n := testutil.Count(t, d, `SELECT COUNT(*) FROM settings`); n != 0 {
 		t.Errorf("rejected values left %d rows behind", n)
 	}
 }
@@ -222,5 +222,38 @@ func TestCorruptStoredValuesAreReported(t *testing.T) {
 	}
 	if _, err := s.GetSetupCompleted(ctx); err == nil {
 		t.Error("an empty setup_completed was treated as unset")
+	}
+}
+
+func storedUpdatedAt(t *testing.T, d *db.DB, key string) string {
+	t.Helper()
+	var at string
+	if err := d.R.QueryRowContext(t.Context(), `SELECT updated_at FROM settings WHERE key = ?`, key).Scan(&at); err != nil {
+		t.Fatal(err)
+	}
+	return at
+}
+
+func TestSettingsRecordTheClockAsTheirUpdateTime(t *testing.T) {
+	s, d := newStore(t)
+	ctx := t.Context()
+	first := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	s.now = func() time.Time { return first }
+
+	if err := s.SetInstanceName(ctx, "One"); err != nil {
+		t.Fatal(err)
+	}
+	if got := storedUpdatedAt(t, d, "instance_name"); got != "2026-03-04T05:06:07Z" {
+		t.Errorf("updated_at after insert = %q, want the clock", got)
+	}
+
+	// An overwrite moves the time, and so does a write through a transaction's store.
+	s.now = func() time.Time { return first.Add(48 * time.Hour) }
+	err := d.InTx(ctx, func(tx *sql.Tx) error { return s.WithTx(tx).SetInstanceName(ctx, "Two") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := storedUpdatedAt(t, d, "instance_name"); got != "2026-03-06T05:06:07Z" {
+		t.Errorf("updated_at after overwrite = %q, want the later clock", got)
 	}
 }

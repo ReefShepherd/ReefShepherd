@@ -6,17 +6,19 @@
   import { isApiError } from '#lib/api/client.js';
   import { errorText } from '#lib/api/error-text.js';
   import { safeNext } from '#lib/auth/next.js';
+  import Alert from '#lib/components/forms/Alert.svelte';
+  import TextField from '#lib/components/forms/TextField.svelte';
+  import PageTitle from '#lib/components/shell/PageTitle.svelte';
+  import { focusFirstField, focusFirstInvalid } from '#lib/dom.js';
+  import { hasErrors, type FieldErrors } from '#lib/forms/codes.js';
+  import { fieldTexts } from '#lib/forms/serverErrors.js';
   import {
     collectErrors,
     normalizeTotpCode,
     validateRecoveryCode,
     validateRequired,
     validateTotpCode
-  } from '#lib/auth/validation.js';
-  import Alert from '#lib/components/forms/Alert.svelte';
-  import TextField from '#lib/components/forms/TextField.svelte';
-  import PageTitle from '#lib/components/shell/PageTitle.svelte';
-  import { focusFirstField, focusFirstInvalid } from '#lib/dom.js';
+  } from '#lib/forms/validation.js';
   import { m } from '#lib/paraglide/messages.js';
   import { session } from '#lib/session/session.svelte.js';
 
@@ -29,9 +31,8 @@
   let password = $state('');
   let code = $state('');
   let recoveryCode = $state('');
-  let errors = $state<Partial<Record<'username' | 'password' | 'code' | 'recoveryCode', string>>>(
-    {}
-  );
+  let errors = $state<FieldErrors>({});
+  const texts = $derived(fieldTexts(errors));
   let failure = $state('');
   let busy = $state(false);
   let form = $state<HTMLFormElement>();
@@ -82,7 +83,7 @@
       }
       failure = errorText(e);
       if (isApiError(e) && e.code === 'invalid_code') {
-        errors = { [step === 'code' ? 'code' : 'recoveryCode']: failure };
+        errors = { [step === 'code' ? 'code' : 'recovery_code']: 'incorrect' };
       }
       await focusFirstInvalid(form);
     } finally {
@@ -96,7 +97,7 @@
       username: validateRequired(username),
       password: validateRequired(password)
     });
-    if (Object.keys(errors).length > 0) return void focusFirstInvalid(form);
+    if (hasErrors(errors)) return void focusFirstInvalid(form);
     void run(async () => {
       const result = await authApi.login(username.trim(), password);
       password = '';
@@ -108,7 +109,7 @@
   function submitCode(event: SubmitEvent) {
     event.preventDefault();
     errors = collectErrors({ code: validateTotpCode(code) });
-    if (Object.keys(errors).length > 0) return void focusFirstInvalid(form);
+    if (hasErrors(errors)) return void focusFirstInvalid(form);
     void run(async () => {
       await authApi.verifyCode(normalizeTotpCode(code));
       await finish();
@@ -117,8 +118,8 @@
 
   function submitRecovery(event: SubmitEvent) {
     event.preventDefault();
-    errors = collectErrors({ recoveryCode: validateRecoveryCode(recoveryCode) });
-    if (Object.keys(errors).length > 0) return void focusFirstInvalid(form);
+    errors = collectErrors({ recovery_code: validateRecoveryCode(recoveryCode) });
+    if (hasErrors(errors)) return void focusFirstInvalid(form);
     void run(async () => {
       await authApi.verifyRecoveryCode(recoveryCode.trim());
       await finish();
@@ -154,7 +155,7 @@
         <TextField
           label={m.login_username()}
           bind:value={username}
-          error={errors.username}
+          error={texts.username}
           autocomplete="username"
           autocapitalize="none"
           spellcheck={false}
@@ -163,7 +164,7 @@
           label={m.login_password()}
           type="password"
           bind:value={password}
-          error={errors.password}
+          error={texts.password}
           autocomplete="current-password"
         />
         <button class="btn primary" type="submit" disabled={busy}>{m.login_submit()}</button>
@@ -180,7 +181,7 @@
         <TextField
           label={m.login_mfa_code()}
           bind:value={code}
-          error={errors.code}
+          error={texts.code}
           inputmode="numeric"
           autocomplete="one-time-code"
         />
@@ -204,7 +205,7 @@
         <TextField
           label={m.login_mfa_recovery()}
           bind:value={recoveryCode}
-          error={errors.recoveryCode}
+          error={texts.recovery_code}
           autocomplete="off"
           autocapitalize="characters"
           spellcheck={false}

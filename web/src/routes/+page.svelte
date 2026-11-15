@@ -17,7 +17,7 @@
       .catch(() => {});
   });
 
-  const tankName = $derived(tankList.active.find((t) => String(t.id) === currentTank.id)?.name);
+  const tankName = $derived(tankList.active.find((t) => t.id === currentTank.id)?.name);
 </script>
 
 <PageTitle title={m.nav_dashboard()} />

@@ -1,6 +1,4 @@
 <script lang="ts">
-  import { errorText } from '#lib/api/error-text.js';
-  import { fieldText } from '#lib/api/field-errors.js';
   import type { ParameterDefinition } from '#lib/api/params.js';
   import { tanksApi, tankTypes, type Tank } from '#lib/api/tanks.js';
   import Alert from '#lib/components/forms/Alert.svelte';
@@ -9,6 +7,9 @@
   import TextField from '#lib/components/forms/TextField.svelte';
   import ValueInput from '#lib/components/forms/ValueInput.svelte';
   import { focusFirstField, focusFirstInvalid } from '#lib/dom.js';
+  import { hasErrors, type FieldErrors } from '#lib/forms/codes.js';
+  import { guarded, type GuardHooks } from '#lib/forms/guarded.js';
+  import { fieldTexts } from '#lib/forms/serverErrors.js';
   import { m } from '#lib/paraglide/messages.js';
   import {
     draftFromTank,
@@ -16,8 +17,7 @@
     tankChanges,
     tankNameMax,
     tankNoteMax,
-    tankProblems,
-    type TankProblems
+    validateTank
   } from '#lib/tank/form.js';
   import PresetChecklist from './PresetChecklist.svelte';
   import { tankTypeLabel } from './labels.js';
@@ -41,39 +41,27 @@
   // Every preset starts switched on, since most people track the basics.
   // svelte-ignore state_referenced_locally
   let chosen = $state<string[]>(presets.flatMap((p) => (p.preset_key ? [p.preset_key] : [])));
-  let errors = $state<
-    Partial<Record<'name' | 'volume' | 'note' | 'startedOn' | 'presets', string>>
-  >({});
+  let errors = $state<FieldErrors>({});
+  const texts = $derived(fieldTexts(errors, { name: tankNameMax, note: tankNoteMax }));
   let failure = $state('');
   let busy = $state(false);
   let form = $state<HTMLFormElement>();
 
-  function clientErrors(p: TankProblems) {
-    return {
-      name:
-        p.name === 'required'
-          ? m.validation_required()
-          : p.name === 'too_long'
-            ? m.validation_name_long({ max: tankNameMax })
-            : undefined,
-      volume:
-        p.volume === 'invalid_number'
-          ? m.value_invalid_number()
-          : p.volume === 'not_positive'
-            ? m.tanks_volume_positive()
-            : undefined,
-      note: p.note === 'too_long' ? m.validation_name_long({ max: tankNoteMax }) : undefined
-    };
-  }
+  const hooks: GuardHooks = {
+    failure: (text) => (failure = text),
+    busy: (b) => (busy = b),
+    fields: (f) => (errors = f),
+    shown: ['name', 'volume', 'note', 'started_on', 'presets'],
+    form: () => form
+  };
 
   async function submit(event: SubmitEvent) {
     event.preventDefault();
     failure = '';
-    errors = clientErrors(tankProblems(draft));
-    if (Object.values(errors).some(Boolean)) return focusFirstInvalid(form);
+    errors = validateTank(draft);
+    if (hasErrors(errors)) return focusFirstInvalid(form);
 
-    busy = true;
-    try {
+    await guarded(async () => {
       let saved: Tank;
       if (tank) {
         const changes = tankChanges(tank, draft);
@@ -82,19 +70,7 @@
         saved = await tanksApi.create(newTankBody(draft, chosen));
       }
       onsaved(saved);
-    } catch (e) {
-      errors = {
-        name: fieldText(e, 'name'),
-        volume: fieldText(e, 'volume'),
-        note: fieldText(e, 'note'),
-        startedOn: fieldText(e, 'started_on'),
-        presets: fieldText(e, 'presets')
-      };
-      if (!Object.values(errors).some(Boolean)) failure = errorText(e);
-      await focusFirstInvalid(form);
-    } finally {
-      busy = false;
-    }
+    }, hooks);
   }
 </script>
 
@@ -105,7 +81,7 @@
   <TextField
     label={m.tanks_name()}
     bind:value={draft.name}
-    error={errors.name}
+    error={texts.name}
     autocomplete="off"
     maxlength={tankNameMax}
   />
@@ -118,19 +94,19 @@
     label={m.tanks_volume()}
     bind:value={draft.volume}
     unit={volumeUnit}
-    error={errors.volume}
+    error={texts.volume}
     hint={m.tanks_volume_hint()}
   />
   <TextField
     label={m.tanks_started_on()}
     type="date"
     bind:value={draft.startedOn}
-    error={errors.startedOn}
+    error={texts.started_on}
   />
-  <TextAreaField label={m.tanks_note()} bind:value={draft.note} error={errors.note} />
+  <TextAreaField label={m.tanks_note()} bind:value={draft.note} error={texts.note} />
 
   {#if !tank}
-    <PresetChecklist {presets} bind:chosen error={errors.presets} />
+    <PresetChecklist {presets} bind:chosen error={texts.presets} />
   {/if}
 
   <div class="row">

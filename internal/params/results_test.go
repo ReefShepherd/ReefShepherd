@@ -7,8 +7,11 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 )
 
 func resultPath(id int64) string { return "/api/v1/results/" + strconv.FormatInt(id, 10) }
@@ -19,7 +22,7 @@ func TestMultiParameterEntryStoresEveryReadingAtOneTime(t *testing.T) {
 	temp, ph, alk := e.preset("temperature"), e.preset("ph"), e.preset("alkalinity")
 
 	var out struct {
-		Results []ResultView `json:"results"`
+		Items []ResultView `json:"items"`
 	}
 	e.must(http.StatusCreated, http.MethodPost, tankPath(tank, "/results"), map[string]any{
 		"measured_at": "2026-10-24T08:30:00-04:00",
@@ -29,8 +32,8 @@ func TestMultiParameterEntryStoresEveryReadingAtOneTime(t *testing.T) {
 			{"parameter_id": alk, "value": 8.4},
 		},
 	}).decode(&out)
-	if len(out.Results) != 3 {
-		t.Fatalf("results = %+v", out.Results)
+	if len(out.Items) != 3 {
+		t.Fatalf("results = %+v", out.Items)
 	}
 	for i, want := range []struct {
 		pid   int64
@@ -38,17 +41,17 @@ func TestMultiParameterEntryStoresEveryReadingAtOneTime(t *testing.T) {
 		value float64
 		note  string
 	}{{temp, "Temperature", 25.2, ""}, {ph, "pH", 8.1, "after water change"}, {alk, "Alkalinity", 8.4, ""}} {
-		r := out.Results[i]
+		r := out.Items[i]
 		if r.ID == 0 || r.TankID != tank || r.ParameterID != want.pid || r.ParameterName != want.name || r.Value != want.value || r.Note != want.note ||
 			r.MeasuredAt != "2026-10-24T12:30:00Z" || r.Source != "manual" || r.CreatedBy == nil || *r.CreatedBy != e.userID ||
 			r.CreatedAt != "2026-10-24T12:00:00Z" || r.UpdatedAt != r.CreatedAt || !r.InRange {
 			t.Errorf("result %d = %+v", i, r)
 		}
 	}
-	if out.Results[0].ID >= out.Results[1].ID || out.Results[1].ID >= out.Results[2].ID {
-		t.Errorf("ids = %d, %d, %d", out.Results[0].ID, out.Results[1].ID, out.Results[2].ID)
+	if out.Items[0].ID >= out.Items[1].ID || out.Items[1].ID >= out.Items[2].ID {
+		t.Errorf("ids = %d, %d, %d", out.Items[0].ID, out.Items[1].ID, out.Items[2].ID)
 	}
-	if n := e.count(`SELECT COUNT(*) FROM test_results WHERE measured_at = '2026-10-24T12:30:00Z'`); n != 3 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM test_results WHERE measured_at = '2026-10-24T12:30:00Z'`); n != 3 {
 		t.Errorf("%d rows at the shared time, want 3", n)
 	}
 }
@@ -70,7 +73,7 @@ func TestEntryIsAllOrNothing(t *testing.T) {
 	tank := e.addTank("Atomic")
 	ph, calcium := e.preset("ph"), e.preset("calcium")
 	// The database refuses the second reading, after the first has already been written.
-	e.exec(`CREATE TRIGGER refuse_99 BEFORE INSERT ON test_results WHEN NEW.value = 99 BEGIN SELECT RAISE(ABORT, 'refused'); END`)
+	testutil.Exec(e.t, e.db, `CREATE TRIGGER refuse_99 BEFORE INSERT ON test_results WHEN NEW.value = 99 BEGIN SELECT RAISE(ABORT, 'refused'); END`)
 
 	hooked := 0
 	e.svc.OnResultCreated = func(context.Context, Result) { hooked++ }
@@ -78,7 +81,7 @@ func TestEntryIsAllOrNothing(t *testing.T) {
 		"measured_at": "2026-10-24T09:00:00Z",
 		"results":     []entry{val(ph, 8.1), val(calcium, 99)},
 	})
-	if n := e.count(`SELECT COUNT(*) FROM test_results`); n != 0 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM test_results`); n != 0 {
 		t.Errorf("%d results left behind by a failed entry", n)
 	}
 	if hooked != 0 {
@@ -86,7 +89,7 @@ func TestEntryIsAllOrNothing(t *testing.T) {
 	}
 	// The same entry without the refused value goes through.
 	e.addResults(tank, "2026-10-24T09:00:00Z", val(ph, 8.1), val(calcium, 98))
-	if n := e.count(`SELECT COUNT(*) FROM test_results`); n != 2 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM test_results`); n != 2 {
 		t.Errorf("%d results, want 2", n)
 	}
 }
@@ -98,7 +101,7 @@ func TestEntryIsCheckedInsideTheWriteTransaction(t *testing.T) {
 		code         string
 		field        string
 	}{
-		{"parameter archived while the entry waits for the writer", `UPDATE parameter_definitions SET archived_at = '2026-10-24T11:59:00Z' WHERE preset_key = 'ph'`, http.StatusUnprocessableEntity, "validation", "results.0.parameter_id"},
+		{"parameter archived while the entry waits for the writer", `UPDATE parameter_definitions SET archived_at = '2026-10-24T11:59:00Z' WHERE preset_key = 'ph'`, http.StatusUnprocessableEntity, "validation", "results.0.parameter_id=invalid"},
 		{"tank deleted while the entry waits for the writer", `DELETE FROM tanks`, http.StatusNotFound, "not_found", ""},
 	}
 	for _, tc := range cases {
@@ -129,12 +132,13 @@ func TestEntryIsCheckedInsideTheWriteTransaction(t *testing.T) {
 			}
 
 			r := <-done
-			var b errBody
+			var b testutil.ErrorBody
 			_ = json.Unmarshal(r.Body.Bytes(), &b)
-			if r.Code != tc.status || b.Error.Code != tc.code || (tc.field != "" && b.Error.Fields[tc.field] == "") {
+			field, code, _ := strings.Cut(tc.field, "=")
+			if r.Code != tc.status || b.Error.Code != tc.code || b.Error.Fields[field] != code {
 				t.Errorf("status=%d code=%q fields=%v, want %d %q %s; body=%s", r.Code, b.Error.Code, b.Error.Fields, tc.status, tc.code, tc.field, r.Body)
 			}
-			if n := e.count(`SELECT COUNT(*) FROM test_results`); n != 0 {
+			if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM test_results`); n != 0 {
 				t.Errorf("%d results stored", n)
 			}
 		})
@@ -154,30 +158,30 @@ func TestEntryValidationReportsEveryProblemAndStoresNothing(t *testing.T) {
 		body   map[string]any
 		fields []string
 	}{
-		{"no results key", map[string]any{"measured_at": "2026-10-24T09:00:00Z"}, []string{"results"}},
-		{"empty list", map[string]any{"results": []entry{}}, []string{"results"}},
-		{"too many", map[string]any{"results": tooMany(ph)}, []string{"results"}},
-		{"unknown parameter", map[string]any{"results": []entry{val(9999, 1)}}, []string{"results.0.parameter_id"}},
-		{"archived parameter", map[string]any{"results": []entry{val(archived, 1)}}, []string{"results.0.parameter_id"}},
-		{"listed twice", map[string]any{"results": []entry{val(ph, 8), val(ph, 8.1)}}, []string{"results.1.parameter_id"}},
-		{"missing value", map[string]any{"results": []map[string]any{{"parameter_id": ph}}}, []string{"results.0.value"}},
-		{"negative alkalinity", map[string]any{"results": []entry{val(alk, -1)}}, []string{"results.0.value"}},
-		{"long note", map[string]any{"results": []entry{{ParameterID: ph, Value: ptr(8.1), Note: repeat("n", 2001)}}}, []string{"results.0.note"}},
-		{"time without an offset", map[string]any{"measured_at": "2026-10-24 09:00", "results": []entry{val(ph, 8)}}, []string{"measured_at"}},
-		{"time a week ahead", map[string]any{"measured_at": "2026-10-31T12:00:00Z", "results": []entry{val(ph, 8)}}, []string{"measured_at"}},
-		{"value of the wrong type", map[string]any{"results": []map[string]any{{"parameter_id": ph, "value": "8.1"}}}, []string{"results.0.value"}},
-		{"unknown entry field", map[string]any{"results": []map[string]any{{"parameter_id": ph, "value": 8, "unit": "x"}}}, []string{"unit"}},
+		{"no results key", map[string]any{"measured_at": "2026-10-24T09:00:00Z"}, []string{"results=required"}},
+		{"empty list", map[string]any{"results": []entry{}}, []string{"results=required"}},
+		{"too many", map[string]any{"results": tooMany(ph)}, []string{"results=too_long"}},
+		{"unknown parameter", map[string]any{"results": []entry{val(9999, 1)}}, []string{"results.0.parameter_id=invalid"}},
+		{"archived parameter", map[string]any{"results": []entry{val(archived, 1)}}, []string{"results.0.parameter_id=invalid"}},
+		{"listed twice", map[string]any{"results": []entry{val(ph, 8), val(ph, 8.1)}}, []string{"results.1.parameter_id=invalid"}},
+		{"missing value", map[string]any{"results": []map[string]any{{"parameter_id": ph}}}, []string{"results.0.value=required"}},
+		{"negative alkalinity", map[string]any{"results": []entry{val(alk, -1)}}, []string{"results.0.value=out_of_range"}},
+		{"long note", map[string]any{"results": []entry{{ParameterID: ph, Value: ptr(8.1), Note: repeat("n", 2001)}}}, []string{"results.0.note=too_long"}},
+		{"time without an offset", map[string]any{"measured_at": "2026-10-24 09:00", "results": []entry{val(ph, 8)}}, []string{"measured_at=invalid"}},
+		{"time a week ahead", map[string]any{"measured_at": "2026-10-31T12:00:00Z", "results": []entry{val(ph, 8)}}, []string{"measured_at=out_of_range"}},
+		{"value of the wrong type", map[string]any{"results": []map[string]any{{"parameter_id": ph, "value": "8.1"}}}, []string{"results.0.value=invalid"}},
+		{"unknown entry field", map[string]any{"results": []map[string]any{{"parameter_id": ph, "value": 8, "unit": "x"}}}, []string{"unit=invalid"}},
 		{"several at once", map[string]any{
 			"measured_at": "yesterday",
 			"results":     []entry{val(ph, 8.1), val(9999, 1), val(alk, -2), val(nitrate, 5), {ParameterID: nitrate}},
-		}, []string{"measured_at", "results.1.parameter_id", "results.2.value", "results.4.parameter_id", "results.4.value"}},
+		}, []string{"measured_at=invalid", "results.1.parameter_id=invalid", "results.2.value=out_of_range", "results.4.parameter_id=invalid", "results.4.value=required"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			e.invalid(http.MethodPost, path, tc.body, tc.fields...)
 		})
 	}
-	if n := e.count(`SELECT COUNT(*) FROM test_results`); n != 0 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM test_results`); n != 0 {
 		t.Errorf("%d results stored by rejected entries", n)
 	}
 	e.fail(http.StatusNotFound, "not_found", http.MethodPost, tankPath(9999, "/results"), map[string]any{"results": []entry{val(ph, 8)}})
@@ -191,18 +195,6 @@ func tooMany(pid int64) []entry {
 	return out
 }
 
-func TestPostingResultsNeedsASignedInUser(t *testing.T) {
-	e := newEnv(t)
-	tank, ph := e.addTank("Anonymous"), e.preset("ph")
-	r := e.doOn(e.bare, http.MethodPost, tankPath(tank, "/results"), map[string]any{"results": []entry{val(ph, 8)}})
-	if r.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, body %s", r.Code, r.Body)
-	}
-	if n := e.count(`SELECT COUNT(*) FROM test_results`); n != 0 {
-		t.Errorf("%d results stored without a user", n)
-	}
-}
-
 func TestOnResultCreatedRunsAfterCommitForEachResult(t *testing.T) {
 	e := newEnv(t)
 	tank, ph, calcium := e.addTank("Hook"), e.preset("ph"), e.preset("calcium")
@@ -213,7 +205,7 @@ func TestOnResultCreatedRunsAfterCommitForEachResult(t *testing.T) {
 	var visible []int
 	e.svc.OnResultCreated = func(ctx context.Context, r Result) {
 		got = append(got, r)
-		visible = append(visible, e.count(`SELECT COUNT(*) FROM test_results WHERE id = ?`, r.ID))
+		visible = append(visible, testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM test_results WHERE id = ?`, r.ID))
 	}
 	created := e.addResults(tank, "2026-10-24T09:00:00.75Z", val(ph, 8.1), entry{ParameterID: calcium, Value: ptr(421.0), Note: "x"})
 	if len(got) != 2 || !slices.Equal(visible, []int{1, 1}) {
@@ -229,7 +221,7 @@ func TestOnResultCreatedRunsAfterCommitForEachResult(t *testing.T) {
 	}
 
 	// A rejected entry never reaches the hook.
-	e.invalid(http.MethodPost, tankPath(tank, "/results"), map[string]any{"results": []entry{val(ph, 8), val(9999, 1)}}, "results.1.parameter_id")
+	e.invalid(http.MethodPost, tankPath(tank, "/results"), map[string]any{"results": []entry{val(ph, 8), val(9999, 1)}}, "results.1.parameter_id=invalid")
 	if len(got) != 2 {
 		t.Errorf("hook called for a rejected entry: %d calls", len(got))
 	}
@@ -276,10 +268,10 @@ func TestResultListPagesNewestFirstWithACursor(t *testing.T) {
 			var page ResultPage
 			e.must(http.StatusOK, http.MethodGet, tankPath(tank, "/results"+q), nil).decode(&page)
 			pages++
-			if len(page.Results) > limit {
-				t.Fatalf("limit %d returned %d results", limit, len(page.Results))
+			if len(page.Items) > limit {
+				t.Fatalf("limit %d returned %d results", limit, len(page.Items))
 			}
-			for _, r := range page.Results {
+			for _, r := range page.Items {
 				got = append(got, r.ID)
 			}
 			if page.NextCursor == nil {
@@ -302,8 +294,8 @@ func TestResultListPagesNewestFirstWithACursor(t *testing.T) {
 	// The default page size holds everything here and leaves no cursor.
 	var page ResultPage
 	e.must(http.StatusOK, http.MethodGet, tankPath(tank, "/results"), nil).decode(&page)
-	if len(page.Results) != 7 || page.NextCursor != nil || page.Results[0].MeasuredAt != "2026-10-22T10:00:00Z" || page.Results[6].MeasuredAt != "2026-10-18T10:00:00Z" {
-		t.Errorf("default page = %d results, cursor %v", len(page.Results), page.NextCursor)
+	if len(page.Items) != 7 || page.NextCursor != nil || page.Items[0].MeasuredAt != "2026-10-22T10:00:00Z" || page.Items[6].MeasuredAt != "2026-10-18T10:00:00Z" {
+		t.Errorf("default page = %d results, cursor %v", len(page.Items), page.NextCursor)
 	}
 }
 
@@ -317,7 +309,7 @@ func TestResultListFilters(t *testing.T) {
 		t.Helper()
 		var page ResultPage
 		e.must(http.StatusOK, http.MethodGet, tankPath(tank, "/results?"+query), nil).decode(&page)
-		return len(page.Results)
+		return len(page.Items)
 	}
 	if n := count("parameter_id=" + strconv.FormatInt(ph, 10)); n != 5 {
 		t.Errorf("parameter filter: %d, want 5", n)
@@ -341,18 +333,18 @@ func TestResultListFilters(t *testing.T) {
 	}
 
 	path := func(q string) string { return tankPath(tank, "/results?"+q) }
-	e.invalid(http.MethodGet, path("parameter_id=abc"), nil, "parameter_id")
-	e.invalid(http.MethodGet, path("parameter_id=0"), nil, "parameter_id")
-	e.invalid(http.MethodGet, path("from=2026-10-19"), nil, "from")
-	e.invalid(http.MethodGet, path("to=soon"), nil, "to")
-	e.invalid(http.MethodGet, path("from=2026-10-22T00:00:00Z&to=2026-10-21T00:00:00Z"), nil, "from")
-	e.invalid(http.MethodGet, path("limit=0"), nil, "limit")
-	e.invalid(http.MethodGet, path("limit=201"), nil, "limit")
-	e.invalid(http.MethodGet, path("limit=ten"), nil, "limit")
-	e.invalid(http.MethodGet, path("cursor=%21%21%21"), nil, "cursor")
-	e.invalid(http.MethodGet, path("cursor=eHl6"), nil, "cursor")
-	e.invalid(http.MethodGet, path("cursor=bm90dGltZXw1"), nil, "cursor")
-	e.invalid(http.MethodGet, path("from=bad&to=worse&limit=0"), nil, "from", "to", "limit")
+	e.invalid(http.MethodGet, path("parameter_id=abc"), nil, "parameter_id=invalid")
+	e.invalid(http.MethodGet, path("parameter_id=0"), nil, "parameter_id=invalid")
+	e.invalid(http.MethodGet, path("from=2026-10-19"), nil, "from=invalid")
+	e.invalid(http.MethodGet, path("to=soon"), nil, "to=invalid")
+	e.invalid(http.MethodGet, path("from=2026-10-22T00:00:00Z&to=2026-10-21T00:00:00Z"), nil, "from=out_of_range")
+	e.invalid(http.MethodGet, path("limit=0"), nil, "limit=out_of_range")
+	e.invalid(http.MethodGet, path("limit=201"), nil, "limit=out_of_range")
+	e.invalid(http.MethodGet, path("limit=ten"), nil, "limit=out_of_range")
+	e.invalid(http.MethodGet, path("cursor=%21%21%21"), nil, "cursor=invalid")
+	e.invalid(http.MethodGet, path("cursor=eHl6"), nil, "cursor=invalid")
+	e.invalid(http.MethodGet, path("cursor=bm90dGltZXw1"), nil, "cursor=invalid")
+	e.invalid(http.MethodGet, path("from=bad&to=worse&limit=0"), nil, "from=invalid", "to=invalid", "limit=out_of_range")
 	e.fail(http.StatusNotFound, "not_found", http.MethodGet, tankPath(9999, "/results"), nil)
 }
 
@@ -379,12 +371,12 @@ func TestPatchResult(t *testing.T) {
 	}
 	e.must(http.StatusOK, http.MethodPatch, resultPath(id), map[string]any{})
 
-	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"value": -9999}, "value")
-	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"measured_at": "tomorrow"}, "measured_at")
-	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"measured_at": "2027-01-01T00:00:00Z"}, "measured_at")
-	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"note": repeat("n", 2001)}, "note")
-	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"parameter_id": 3}, "parameter_id")
-	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"value": -9999, "note": repeat("n", 2001)}, "value", "note")
+	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"value": -9999}, "value=out_of_range")
+	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"measured_at": "tomorrow"}, "measured_at=invalid")
+	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"measured_at": "2027-01-01T00:00:00Z"}, "measured_at=out_of_range")
+	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"note": repeat("n", 2001)}, "note=too_long")
+	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"parameter_id": 3}, "parameter_id=invalid")
+	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"value": -9999, "note": repeat("n", 2001)}, "value=out_of_range", "note=too_long")
 	near(t, "stored °C after rejected patches", e.storedValues()[0], 28, 1e-9)
 	e.fail(http.StatusNotFound, "not_found", http.MethodPatch, resultPath(9999), map[string]any{"note": "x"})
 	e.fail(http.StatusNotFound, "not_found", http.MethodPatch, "/api/v1/results/abc", map[string]any{"note": "x"})
@@ -398,13 +390,13 @@ func TestDeletesRefuseNonJSONBodies(t *testing.T) {
 
 	for _, target := range []string{resultPath(result.ID), paramPath(custom, "")} {
 		r := e.doRaw(http.MethodDelete, target, "text/plain", "please")
-		var b errBody
+		var b testutil.ErrorBody
 		_ = json.Unmarshal(r.Body.Bytes(), &b)
 		if r.Code != http.StatusUnsupportedMediaType || b.Error.Code != "unsupported_media_type" {
 			t.Errorf("DELETE %s with a text body: status=%d code=%q", target, r.Code, b.Error.Code)
 		}
 	}
-	if n := e.count(`SELECT COUNT(*) FROM test_results`) + e.count(`SELECT COUNT(*) FROM parameter_definitions WHERE id = ?`, custom); n != 2 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM test_results`) + testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM parameter_definitions WHERE id = ?`, custom); n != 2 {
 		t.Errorf("a refused delete removed something (%d rows left, want 2)", n)
 	}
 	if r := e.doRaw(http.MethodDelete, resultPath(result.ID), "application/json", ""); r.Code != http.StatusNoContent {
@@ -421,8 +413,8 @@ func TestDeleteResult(t *testing.T) {
 	e.must(http.StatusNoContent, http.MethodDelete, resultPath(first.ID), nil)
 	var page ResultPage
 	e.must(http.StatusOK, http.MethodGet, tankPath(tank, "/results"), nil).decode(&page)
-	if len(page.Results) != 1 || page.Results[0].ID != second.ID {
-		t.Errorf("remaining = %+v", page.Results)
+	if len(page.Items) != 1 || page.Items[0].ID != second.ID {
+		t.Errorf("remaining = %+v", page.Items)
 	}
 	e.fail(http.StatusNotFound, "not_found", http.MethodDelete, resultPath(first.ID), nil)
 	e.fail(http.StatusNotFound, "not_found", http.MethodDelete, "/api/v1/results/0", nil)

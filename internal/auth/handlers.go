@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/reefshepherd/reefshepherd/internal/config"
@@ -18,31 +17,34 @@ import (
 
 // PublicRoutes registers the endpoints that work without a session.
 func (s *Service) PublicRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/auth/config", s.handle(s.getConfig))
-	mux.HandleFunc("POST /api/v1/auth/login", s.handle(s.login))
-	mux.HandleFunc("POST /api/v1/auth/mfa", s.handle(s.mfa))
-	mux.HandleFunc("POST /api/v1/auth/logout", s.handle(s.logout))
+	handle := func(h httpx.HandlerFunc) http.Handler { return httpx.Handle(s.Logger, h) }
+	mux.Handle("GET /api/v1/auth/config", handle(s.getConfig))
+	mux.Handle("POST /api/v1/auth/login", handle(s.login))
+	mux.Handle("POST /api/v1/auth/mfa", handle(s.mfa))
+	mux.Handle("POST /api/v1/auth/logout", handle(s.logout))
 }
 
 // Routes registers the signed-in user's own security endpoints; the caller wraps mux in RequireUser.
 func (s *Service) Routes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/v1/me/password", s.handle(s.changePassword))
-	mux.HandleFunc("POST /api/v1/me/totp/enroll", s.handle(s.enrollTOTP))
-	mux.HandleFunc("POST /api/v1/me/totp/confirm", s.handle(s.confirmTOTP))
-	mux.HandleFunc("DELETE /api/v1/me/totp", s.handle(s.disableTOTP))
-	mux.HandleFunc("GET /api/v1/me/sessions", s.handle(s.listSessions))
-	mux.HandleFunc("DELETE /api/v1/me/sessions/{id}", s.handle(s.revokeSession))
+	handle := func(h httpx.HandlerFunc) http.Handler { return httpx.Handle(s.Logger, h) }
+	mux.Handle("POST /api/v1/me/password", handle(s.changePassword))
+	mux.Handle("POST /api/v1/me/totp/enroll", handle(s.enrollTOTP))
+	mux.Handle("POST /api/v1/me/totp/confirm", handle(s.confirmTOTP))
+	mux.Handle("DELETE /api/v1/me/totp", handle(s.disableTOTP))
+	mux.Handle("GET /api/v1/me/sessions", handle(s.listSessions))
+	mux.Handle("DELETE /api/v1/me/sessions/{id}", handle(s.revokeSession))
 }
 
-type handlerFunc func(w http.ResponseWriter, r *http.Request) error
-
-// handle adapts a handler that returns an error, so every failure takes the same path to the client.
-func (s *Service) handle(h handlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if err := h(w, r); err != nil {
-			httpx.Fail(s.Logger, w, r, err)
-		}
+// APIError gives the refusals this package's services return their HTTP form, for handlers elsewhere to chain before their own mapper.
+func APIError(err error) error {
+	if !errors.Is(err, ErrEnvLocked) {
+		return err
 	}
+	fields := httpx.FieldErrors{}
+	fields.Add("auth_mode", httpx.CodeLocked)
+	e := httpx.Validation(fields)
+	e.Status, e.Code, e.Message = http.StatusConflict, "env_locked", ErrEnvLocked.Error()
+	return e
 }
 
 type configResponse struct {
@@ -73,7 +75,7 @@ func (s *Service) getConfig(w http.ResponseWriter, r *http.Request) error {
 	if mode == config.AuthModePassword {
 		methods = append(methods, MethodPassword)
 	}
-	httpx.WriteJSON(w, http.StatusOK, configResponse{Mode: mode, SetupRequired: setup, Methods: methods, InstanceName: name, Version: version.Version(), ModeLocked: s.Config.AuthMode != ""})
+	httpx.WriteJSON(w, http.StatusOK, configResponse{Mode: mode, SetupRequired: setup, Methods: methods, InstanceName: name, Version: version.Version(), ModeLocked: s.ModeLocked()})
 	return nil
 }
 
@@ -100,21 +102,19 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if req.Username == "" || req.Password == "" {
-		fields := map[string]string{}
+		fields := httpx.FieldErrors{Message: "username and password are required"}
 		if req.Username == "" {
-			fields["username"] = "required"
+			fields.Add("username", httpx.CodeRequired)
 		}
 		if req.Password == "" {
-			fields["password"] = "required"
+			fields.Add("password", httpx.CodeRequired)
 		}
-		return httpx.Validation("username and password are required", fields)
+		return fields.Err()
 	}
 
-	ip := httpx.ClientIP(r, s.Config.TrustedProxies)
-	name := normalizeUsername(req.Username)
-	try, wait := s.limiter.begin(ip, name)
-	if wait > 0 {
-		return tooManyAttempts(wait)
+	try, err := s.beginAttempt(r, req.Username)
+	if err != nil {
+		return err
 	}
 
 	invalid := func() error {
@@ -133,7 +133,7 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) error {
 	}
 	ok, rehash, err := s.Passwords.Verify(ctx, req.Password, *u.PasswordHash)
 	if err != nil {
-		s.logger().Warn("verify password", "user_id", u.ID, "error", err)
+		s.Logger.Warn("verify password", "user_id", u.ID, "error", err)
 		return invalid()
 	}
 	if !ok {
@@ -183,14 +183,12 @@ func (s *Service) mfa(w http.ResponseWriter, r *http.Request) error {
 		return httpx.Unauthorized("sign in again")
 	}
 	if (req.Code == "") == (req.RecoveryCode == "") {
-		return httpx.Validation("send either code or recovery_code", map[string]string{"code": "send either code or recovery_code"})
+		return httpx.Reject("send either code or recovery_code", "code", httpx.CodeRequired)
 	}
 
-	ip := httpx.ClientIP(r, s.Config.TrustedProxies)
-	name := normalizeUsername(row.Username)
-	try, wait := s.limiter.begin(ip, name)
-	if wait > 0 {
-		return tooManyAttempts(wait)
+	try, err := s.beginAttempt(r, row.Username)
+	if err != nil {
+		return err
 	}
 	if req.Code != "" {
 		ok, err = s.verifyTOTP(ctx, row.UserID, req.Code)
@@ -211,9 +209,9 @@ func (s *Service) mfa(w http.ResponseWriter, r *http.Request) error {
 	now := s.now()
 	n, err := db.Q(s.DB.W).UpgradeSession(ctx, dbgen.UpgradeSessionParams{
 		TokenHash:  hash,
-		CreatedAt:  formatTime(now),
-		LastSeenAt: formatTime(now),
-		ExpiresAt:  formatTime(now.Add(sessionLifetime)),
+		CreatedAt:  db.FormatTime(now),
+		LastSeenAt: db.FormatTime(now),
+		ExpiresAt:  db.FormatTime(now.Add(sessionLifetime)),
 		ID:         row.SessionID,
 	})
 	if err != nil {
@@ -299,7 +297,7 @@ func (s *Service) confirmTOTP(w http.ResponseWriter, r *http.Request) error {
 	codes, err := s.ConfirmTOTP(r.Context(), user.ID, req.Code)
 	switch {
 	case errors.Is(err, ErrBadCode):
-		return httpx.Validation("that code is not valid", map[string]string{"code": "that code is not valid"})
+		return httpx.Reject("that code is not valid", "code", httpx.CodeIncorrect)
 	case errors.Is(err, ErrNoEnrollment):
 		return httpx.Conflict("start enrolment first")
 	case errors.Is(err, ErrTOTPEnabled):
@@ -361,7 +359,7 @@ func (s *Service) reauthenticate(ctx context.Context, r *http.Request, userID in
 		field, given = "code", req.Code
 	}
 	if given == "" {
-		return httpx.Validation("confirmation required", map[string]string{field: "required"})
+		return httpx.Reject("confirmation required", field, httpx.CodeRequired)
 	}
 	if u.PasswordHash == nil {
 		return s.ConfirmTOTPCode(ctx, r, userID, given, field)
@@ -383,7 +381,7 @@ type sessionJSON struct {
 func (s *Service) listSessions(w http.ResponseWriter, r *http.Request) error {
 	user, _ := httpx.CurrentUser(r.Context())
 	current, _ := SessionID(r.Context())
-	rows, err := db.Q(s.DB.R).ListUserSessions(r.Context(), dbgen.ListUserSessionsParams{UserID: user.ID, ExpiresAt: formatTime(s.now())})
+	rows, err := db.Q(s.DB.R).ListUserSessions(r.Context(), dbgen.ListUserSessionsParams{UserID: user.ID, ExpiresAt: db.FormatTime(s.now())})
 	if err != nil {
 		return fmt.Errorf("list sessions: %w", err)
 	}
@@ -394,7 +392,7 @@ func (s *Service) listSessions(w http.ResponseWriter, r *http.Request) error {
 			CreatedAt: row.CreatedAt, LastSeenAt: row.LastSeenAt, ExpiresAt: row.ExpiresAt, Current: row.ID == current,
 		}
 	}
-	httpx.WriteJSON(w, http.StatusOK, out)
+	httpx.List(w, http.StatusOK, out)
 	return nil
 }
 
@@ -403,8 +401,8 @@ func (s *Service) revokeSession(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	user, _ := httpx.CurrentUser(r.Context())
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || id < 1 {
+	id, ok := httpx.PathID(r, "id")
+	if !ok {
 		return httpx.NotFound("no such session")
 	}
 	n, err := db.Q(s.DB.W).DeleteUserSession(r.Context(), dbgen.DeleteUserSessionParams{ID: id, UserID: user.ID})

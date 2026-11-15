@@ -9,7 +9,8 @@
 
 <script lang="ts">
   import { chartsApi } from '#lib/api/charts.js';
-  import { sparkPoints } from '#lib/components/charts/data.js';
+  import { tankPath } from '#lib/api/tank-id.js';
+  import { toChartPoints, type ChartPoint } from '#lib/components/charts/data.js';
   import { rangeStart } from '#lib/components/charts/range.js';
   import Sparkline from '#lib/components/charts/Sparkline.svelte';
   import { relativeTime } from '#lib/format/datetime.js';
@@ -25,7 +26,7 @@
   const latest = $derived(parameter?.latest ?? null);
   const level = $derived(parameter ? rangeState(parameter) : 'none');
 
-  let points = $state.raw<[number, number][]>([]);
+  let points = $state.raw<ChartPoint[]>([]);
 
   // The trend is decoration, so a history that fails to load just leaves the card without it.
   $effect(() => {
@@ -37,14 +38,9 @@
     }
     const controller = new AbortController();
     chartsApi
-      .series(
-        dash.tankId,
-        String(id),
-        rangeStart('90d', new Date(), dash.timeZone),
-        controller.signal
-      )
+      .series(dash.tankId, id, rangeStart('90d', new Date(), dash.timeZone), controller.signal)
       .then((series) => {
-        if (!controller.signal.aborted) points = sparkPoints(series.points);
+        if (!controller.signal.aborted) points = toChartPoints(series.points);
       })
       .catch(() => {});
     return () => controller.abort();
@@ -57,7 +53,7 @@
   <div class="param">
     <div class="head">
       <h3>
-        <a href="/tanks/{encodeURIComponent(dash.tankId)}/charts/{parameter.parameter_id}">
+        <a href={tankPath(dash.tankId, 'charts', parameter.parameter_id)}>
           {parameter.name}
         </a>
       </h3>

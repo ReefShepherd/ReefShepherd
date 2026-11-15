@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { errorText } from '#lib/api/error-text.js';
-  import { fieldText } from '#lib/api/field-errors.js';
   import { tanksApi, type Tank } from '#lib/api/tanks.js';
   import Alert from '#lib/components/forms/Alert.svelte';
   import TextField from '#lib/components/forms/TextField.svelte';
+  import type { FieldErrors } from '#lib/forms/codes.js';
+  import { guarded } from '#lib/forms/guarded.js';
+  import { fieldTexts } from '#lib/forms/serverErrors.js';
   import { m } from '#lib/paraglide/messages.js';
 
   interface Props {
@@ -14,25 +15,26 @@
   let { tank, ondeleted }: Props = $props();
 
   let typed = $state('');
-  let error = $state<string>();
+  let errors = $state<FieldErrors>({});
+  const texts = $derived(fieldTexts(errors));
   let failure = $state('');
   let busy = $state(false);
 
-  async function remove(event: SubmitEvent) {
+  const remove = (event: SubmitEvent) => {
     event.preventDefault();
-    failure = '';
-    error = undefined;
-    busy = true;
-    try {
-      await tanksApi.remove(tank.id, typed);
-      ondeleted();
-    } catch (e) {
-      error = fieldText(e, 'confirm');
-      if (error === undefined) failure = errorText(e);
-    } finally {
-      busy = false;
-    }
-  }
+    return guarded(
+      async () => {
+        await tanksApi.remove(tank.id, typed);
+        ondeleted();
+      },
+      {
+        failure: (text) => (failure = text),
+        busy: (b) => (busy = b),
+        fields: (f) => (errors = f),
+        shown: ['confirm']
+      }
+    );
+  };
 </script>
 
 <form class="card stack" onsubmit={remove}>
@@ -44,7 +46,7 @@
   <TextField
     label={m.tanks_delete_confirm_label({ name: tank.name })}
     bind:value={typed}
-    {error}
+    error={texts.confirm}
     autocomplete="off"
   />
   <div>

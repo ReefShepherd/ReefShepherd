@@ -1,15 +1,11 @@
 import type { SeriesPoint } from '#lib/api/charts.js';
 
-/** One plotted reading; t is unix seconds, the unit uPlot uses for time scales. */
+/** One plotted reading; t is unix seconds, the unit uPlot uses for time scales, and inRange is the server's verdict against the current ideal range. */
 export interface ChartPoint {
   t: number;
   v: number;
   note: string;
-}
-
-/** True when the value lies outside the ideal range; a null side has no limit. */
-export function outOfRange(v: number, low: number | null, high: number | null): boolean {
-  return (low !== null && v < low) || (high !== null && v > high);
+  inRange: boolean;
 }
 
 /** Converts series readings to plot points, dropping unreadable timestamps. */
@@ -18,20 +14,18 @@ export function toChartPoints(points: readonly SeriesPoint[]): ChartPoint[] {
   for (const p of points) {
     const ms = Date.parse(p.measured_at);
     if (Number.isNaN(ms)) continue;
-    out.push({ t: ms / 1000, v: p.value, note: p.note });
+    out.push({ t: ms / 1000, v: p.value, note: p.note, inRange: p.in_range });
   }
   return out;
 }
 
 /** The out-of-range readings with their index in points, newest first. */
 export function flaggedPoints(
-  points: readonly ChartPoint[],
-  low: number | null,
-  high: number | null
+  points: readonly ChartPoint[]
 ): { index: number; point: ChartPoint }[] {
   const out: { index: number; point: ChartPoint }[] = [];
   for (let index = points.length - 1; index >= 0; index--) {
-    if (outOfRange(points[index].v, low, high)) out.push({ index, point: points[index] });
+    if (!points[index].inRange) out.push({ index, point: points[index] });
   }
   return out;
 }
@@ -88,9 +82,4 @@ export function bandSpan(
     top: high === null ? plotTop : clamp(toPos(high)),
     bottom: low === null ? plotBottom : clamp(toPos(low))
   };
-}
-
-/** [unix seconds, value] pairs for a Sparkline, skipping readings whose timestamp cannot be read. */
-export function sparkPoints(points: readonly SeriesPoint[]): [number, number][] {
-  return toChartPoints(points).map((p) => [p.t, p.v]);
 }

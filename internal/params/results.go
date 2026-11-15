@@ -54,9 +54,9 @@ type paramEntry struct {
 type paramIndex map[int64]paramEntry
 
 func (s *Service) paramIndex(ctx context.Context, q dbgen.DBTX, tankID int64) (paramIndex, error) {
-	rows, err := db.Q(q).ListTankParameters(ctx, dbgen.ListTankParametersParams{TankID: tankID, IncludeArchived: 1})
+	rows, err := tankParameterRows(ctx, q, tankID, true)
 	if err != nil {
-		return nil, fmt.Errorf("list tank parameters: %w", err)
+		return nil, err
 	}
 	d := s.newDisplay(ctx)
 	idx := make(paramIndex, len(rows))
@@ -115,36 +115,31 @@ func (s *Service) CreateResults(ctx context.Context, tankID, userID int64, in Cr
 			return err
 		}
 		q := db.Q(tx)
-		fields := fieldErrors{}
-		measured = s.checkMeasuredAt(in.MeasuredAt, fields)
+		fields := httpx.FieldErrors{Message: "invalid results"}
+		measured = s.checkMeasuredAt(in.MeasuredAt, &fields)
 		switch {
 		case len(in.Results) == 0:
-			fields.add("results", "must list at least one result")
+			fields.Add("results", httpx.CodeRequired)
 		case len(in.Results) > maxResultsPerEntry:
-			fields.add("results", fmt.Sprintf("must list at most %d results", maxResultsPerEntry))
-			return fields.err("invalid results")
+			fields.Add("results", httpx.CodeTooLong)
+			return fields.Err()
 		}
-		readings, err := s.checkReadings(ctx, q, in.Results, fields)
+		readings, err := s.checkReadings(ctx, q, in.Results, &fields)
 		if err != nil {
 			return err
 		}
-		if err := fields.err("invalid results"); err != nil {
+		if err := fields.Err(); err != nil {
 			return err
 		}
-		stamp := s.stamp()
+		stamp := db.FormatTime(s.now())
 		for _, rd := range readings {
-			row := dbgen.TestResult{
-				TankID: tankID, ParameterID: rd.parameterID, MeasuredAt: measured.Format(db.TimeLayout), Value: rd.value,
+			row, err := q.InsertTestResult(ctx, dbgen.InsertTestResultParams{
+				TankID: tankID, ParameterID: rd.parameterID, MeasuredAt: db.FormatTime(measured), Value: rd.value,
 				Note: rd.note, Source: sourceManual, CreatedBy: &userID, CreatedAt: stamp, UpdatedAt: stamp,
-			}
-			id, err := q.InsertTestResult(ctx, dbgen.InsertTestResultParams{
-				TankID: row.TankID, ParameterID: row.ParameterID, MeasuredAt: row.MeasuredAt, Value: row.Value,
-				Note: row.Note, Source: row.Source, CreatedBy: row.CreatedBy, CreatedAt: stamp, UpdatedAt: stamp,
 			})
 			if err != nil {
 				return fmt.Errorf("insert result: %w", err)
 			}
-			row.ID = id
 			stored = append(stored, row)
 		}
 		return nil
@@ -177,7 +172,7 @@ func (s *Service) CreateResults(ctx context.Context, tankID, userID int64, in Cr
 }
 
 // checkReadings validates the entries against the active parameter definitions, adding every problem to fields, and returns the readings converted to canonical units.
-func (s *Service) checkReadings(ctx context.Context, q *dbgen.Queries, entries []ResultEntry, fields fieldErrors) ([]reading, error) {
+func (s *Service) checkReadings(ctx context.Context, q *dbgen.Queries, entries []ResultEntry, fields *httpx.FieldErrors) ([]reading, error) {
 	defs, err := q.ListParameterDefinitions(ctx, 1)
 	if err != nil {
 		return nil, fmt.Errorf("list parameter definitions: %w", err)
@@ -194,20 +189,16 @@ func (s *Service) checkReadings(ctx context.Context, q *dbgen.Queries, entries [
 		field := func(name string) string { return "results." + strconv.Itoa(i) + "." + name }
 		def, known := byID[e.ParameterID]
 		switch {
-		case !known:
-			fields.add(field("parameter_id"), "no such parameter")
-		case def.ArchivedAt != nil:
-			fields.add(field("parameter_id"), "this parameter is archived")
-		case seen[e.ParameterID]:
-			fields.add(field("parameter_id"), "is listed more than once")
+		case !known, def.ArchivedAt != nil, seen[e.ParameterID]:
+			fields.Add(field("parameter_id"), httpx.CodeInvalid)
 		}
 		seen[e.ParameterID] = true
 		note, short := cleanText(e.Note, maxNoteRunes)
 		if !short {
-			fields.add(field("note"), fmt.Sprintf("must be at most %d characters", maxNoteRunes))
+			fields.Add(field("note"), httpx.CodeTooLong)
 		}
 		if e.Value == nil {
-			fields.add(field("value"), "is required")
+			fields.Add(field("value"), httpx.CodeRequired)
 		}
 		if !known || e.Value == nil {
 			continue
@@ -216,9 +207,9 @@ func (s *Service) checkReadings(ctx context.Context, q *dbgen.Queries, entries [
 		if err != nil {
 			return nil, err
 		}
-		canonical, msg := m.canonical(*e.Value)
-		if msg != "" {
-			fields.add(field("value"), msg)
+		canonical, code := m.canonical(*e.Value)
+		if code != "" {
+			fields.Add(field("value"), code)
 			continue
 		}
 		readings = append(readings, reading{e.ParameterID, canonical, note})
@@ -227,18 +218,18 @@ func (s *Service) checkReadings(ctx context.Context, q *dbgen.Queries, entries [
 }
 
 // checkMeasuredAt parses a measurement time, defaulting to now and refusing one far in the future.
-func (s *Service) checkMeasuredAt(raw *string, fields fieldErrors) time.Time {
+func (s *Service) checkMeasuredAt(raw *string, fields *httpx.FieldErrors) time.Time {
 	now := s.now().UTC().Truncate(time.Second)
 	if raw == nil {
 		return now
 	}
-	t, err := parseTimestamp(*raw)
-	if err != nil {
-		fields.add("measured_at", err.Error())
+	t, ok := parseTimestamp(*raw)
+	if !ok {
+		fields.Add("measured_at", httpx.CodeInvalid)
 		return now
 	}
 	if t.After(now.Add(maxFuture)) {
-		fields.add("measured_at", "must not be more than a day in the future")
+		fields.Add("measured_at", httpx.CodeOutOfRange)
 	}
 	return t
 }
@@ -257,7 +248,7 @@ func (s *Service) UpdateResult(ctx context.Context, id int64, in UpdateResultInp
 		q := db.Q(tx)
 		cur, err := q.GetTestResult(ctx, id)
 		if errors.Is(err, sql.ErrNoRows) {
-			return notFound("result")
+			return errNoResult
 		}
 		if err != nil {
 			return fmt.Errorf("read result: %w", err)
@@ -272,28 +263,28 @@ func (s *Service) UpdateResult(ctx context.Context, id int64, in UpdateResultInp
 			return err
 		}
 
-		fields := fieldErrors{}
+		fields := httpx.FieldErrors{Message: "invalid result"}
 		measuredAt, value, note := cur.MeasuredAt, cur.Value, cur.Note
 		if in.MeasuredAt != nil {
-			measuredAt = s.checkMeasuredAt(in.MeasuredAt, fields).Format(db.TimeLayout)
+			measuredAt = db.FormatTime(s.checkMeasuredAt(in.MeasuredAt, &fields))
 		}
 		if in.Value != nil {
-			c, msg := m.canonical(*in.Value)
-			if msg != "" {
-				fields.add("value", msg)
+			c, code := m.canonical(*in.Value)
+			if code != "" {
+				fields.Add("value", code)
 			}
 			value = c
 		}
 		if in.Note != nil {
 			var short bool
 			if note, short = cleanText(*in.Note, maxNoteRunes); !short {
-				fields.add("note", fmt.Sprintf("must be at most %d characters", maxNoteRunes))
+				fields.Add("note", httpx.CodeTooLong)
 			}
 		}
-		if err := fields.err("invalid result"); err != nil {
+		if err := fields.Err(); err != nil {
 			return err
 		}
-		if _, err := q.UpdateTestResult(ctx, dbgen.UpdateTestResultParams{MeasuredAt: measuredAt, Value: value, Note: note, UpdatedAt: s.stamp(), ID: id}); err != nil {
+		if _, err := q.UpdateTestResult(ctx, dbgen.UpdateTestResultParams{MeasuredAt: measuredAt, Value: value, Note: note, UpdatedAt: db.FormatTime(s.now()), ID: id}); err != nil {
 			return fmt.Errorf("update result: %w", err)
 		}
 		return nil
@@ -319,7 +310,7 @@ func (s *Service) DeleteResult(ctx context.Context, id int64) error {
 		return fmt.Errorf("delete result: %w", err)
 	}
 	if n == 0 {
-		return notFound("result")
+		return errNoResult
 	}
 	return nil
 }
@@ -332,12 +323,8 @@ type ResultFilter struct {
 	Limit       int
 }
 
-// ResultPage is one page of results, newest first.
-type ResultPage struct {
-	Results []ResultView `json:"results"`
-	// NextCursor is passed back as the cursor to get the following page, and is null on the last page.
-	NextCursor *string `json:"next_cursor"`
-}
+// ResultPage is one page of results, newest first; its next cursor is passed back as the cursor to get the following page.
+type ResultPage = httpx.Page[ResultView]
 
 // ListResults returns a page of the tank's results, newest first.
 func (s *Service) ListResults(ctx context.Context, tankID int64, f ResultFilter) (ResultPage, error) {
@@ -355,7 +342,7 @@ func (s *Service) ListResults(ctx context.Context, tankID int64, f ResultFilter)
 	if f.Cursor != "" {
 		at, id, err := decodeCursor(f.Cursor)
 		if err != nil {
-			return ResultPage{}, httpx.Validation("invalid cursor", map[string]string{"cursor": "is not a cursor from a previous page"})
+			return ResultPage{}, httpx.Reject("invalid cursor", "cursor", httpx.CodeInvalid)
 		}
 		arg.CursorAt, arg.CursorID = &at, &id
 	}
@@ -363,7 +350,7 @@ func (s *Service) ListResults(ctx context.Context, tankID int64, f ResultFilter)
 	if err != nil {
 		return ResultPage{}, fmt.Errorf("list results: %w", err)
 	}
-	page := ResultPage{Results: []ResultView{}}
+	page := ResultPage{Items: []ResultView{}}
 	if len(rows) > limit {
 		rows = rows[:limit]
 		last := rows[len(rows)-1]
@@ -379,7 +366,7 @@ func (s *Service) ListResults(ctx context.Context, tankID int64, f ResultFilter)
 		if err != nil {
 			return ResultPage{}, err
 		}
-		page.Results = append(page.Results, v)
+		page.Items = append(page.Items, v)
 	}
 	return page, nil
 }
@@ -388,7 +375,7 @@ func formatTimePtr(t *time.Time) *string {
 	if t == nil {
 		return nil
 	}
-	s := t.UTC().Format(db.TimeLayout)
+	s := db.FormatTime(*t)
 	return &s
 }
 
@@ -405,7 +392,7 @@ func decodeCursor(c string) (measuredAt string, id int64, err error) {
 	if !ok {
 		return "", 0, errors.New("malformed cursor")
 	}
-	if _, err := time.Parse(time.RFC3339, at); err != nil {
+	if _, err := db.ParseTime(at); err != nil {
 		return "", 0, err
 	}
 	id, err = strconv.ParseInt(idText, 10, 64)
@@ -448,14 +435,10 @@ func (s *Service) GetSeries(ctx context.Context, tankID, parameterID int64, from
 	if err := tanks.Require(ctx, s.r, tankID); err != nil {
 		return Series{}, err
 	}
-	rows, err := db.Q(s.r).ListTankParameters(ctx, dbgen.ListTankParametersParams{TankID: tankID, ParameterID: &parameterID, IncludeArchived: 1})
+	row, err := tankParameterRow(ctx, s.r, tankID, parameterID)
 	if err != nil {
-		return Series{}, fmt.Errorf("read tank parameter: %w", err)
+		return Series{}, err
 	}
-	if len(rows) == 0 {
-		return Series{}, notFound("parameter")
-	}
-	row := rows[0]
 	m, err := s.newDisplay(ctx).meta(row.UnitFamily, row.UnitLabel, row.Decimals)
 	if err != nil {
 		return Series{}, err

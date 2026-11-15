@@ -115,27 +115,3 @@ RETURNING
 -- name: DeleteTank :execrows
 DELETE FROM tanks
 WHERE id = ?;
-
--- name: ListActivePresetKeys :many
-SELECT CAST(preset_key AS TEXT) AS preset_key
-FROM parameter_definitions
-WHERE preset_key IS NOT NULL AND archived_at IS NULL
-ORDER BY sort_order, id;
-
--- name: EnablePresetParameters :execrows
-INSERT INTO tank_parameters (
-    tank_id, parameter_id, enabled, ideal_low, ideal_high, schedule_kind, interval_days, sort_order, schedule_since, updated_at
-)
-SELECT
-    ?,
-    id,
-    1,
-    default_low,
-    default_high,
-    CASE WHEN default_test_interval_days >= 1 THEN 'after_last' ELSE 'none' END,
-    CASE WHEN default_test_interval_days >= 1 THEN default_test_interval_days END,
-    sort_order,
-    ?,
-    ?
-FROM parameter_definitions
-WHERE archived_at IS NULL AND preset_key IN (sqlc.slice('preset_keys'));

@@ -4,7 +4,7 @@ import { getContext, setContext } from 'svelte';
 
 /** What the cards read from the page that shows them. */
 export interface DashboardContext {
-  readonly tankId: string;
+  readonly tankId: number;
   /** The instance timezone, which decides what "today" means for due tests. */
   readonly timeZone: string;
   readonly parameters: readonly TankParameter[];
@@ -15,7 +15,7 @@ export const dashboardKey = Symbol('dashboard');
 
 /** Makes the tank and its parameters available to the cards below the calling component; both are read again on every use. */
 export function provideDashboard(source: {
-  tankId: () => string;
+  tankId: () => number;
   parameters: () => readonly TankParameter[];
 }): void {
   setContext<DashboardContext>(dashboardKey, {

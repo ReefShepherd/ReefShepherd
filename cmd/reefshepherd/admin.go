@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"text/tabwriter"
@@ -78,7 +78,7 @@ func runAdmin(ctx context.Context, args []string, env config.LookupFunc, stdout,
 	if !ok {
 		return code
 	}
-	e, err := openAdminEnv(ctx, cfg)
+	e, err := openAdminEnv(ctx, cfg, app.NewLogger(stderr, cfg.LogLevel, cfg.LogFormat))
 	if err != nil {
 		fmt.Fprintf(stderr, "reefshepherd admin %s: %v\n", sub, err)
 		return 1
@@ -102,7 +102,7 @@ func runAdmin(ctx context.Context, args []string, env config.LookupFunc, stdout,
 	return 0
 }
 
-func openAdminEnv(ctx context.Context, cfg config.Config) (*adminEnv, error) {
+func openAdminEnv(ctx context.Context, cfg config.Config, logger *slog.Logger) (*adminEnv, error) {
 	path := filepath.Join(cfg.DataDir, app.DBFileName)
 	if _, err := os.Stat(path); err != nil {
 		return nil, fmt.Errorf("no database at %s (is --data-dir right?): %w", path, err)
@@ -117,10 +117,10 @@ func openAdminEnv(ctx context.Context, cfg config.Config) (*adminEnv, error) {
 		return nil, errors.New("the database has not been set up yet; start the server once first")
 	}
 	store := settings.NewStore(database)
-	authSvc := auth.NewService(auth.Deps{DB: database, Settings: store, Passwords: password.NewHasher(password.DefaultParams()), Config: cfg})
+	authSvc := auth.NewService(auth.Deps{DB: database, Settings: store, Passwords: password.NewHasher(password.DefaultParams()), Config: cfg, Logger: logger})
 	return &adminEnv{
 		cfg: cfg, db: database, store: store, auth: authSvc,
-		users: users.NewService(users.Deps{DB: database, Settings: store, Auth: authSvc}),
+		users: users.NewService(users.Deps{DB: database, Settings: store, Auth: authSvc, Logger: logger}),
 	}, nil
 }
 
@@ -133,7 +133,7 @@ func (e *adminEnv) setAuthMode(ctx context.Context, mode string, stdout, stderr 
 		return err
 	}
 	fmt.Fprintf(stdout, "Login mode set to %s.\n", mode)
-	if e.cfg.AuthMode != "" && e.cfg.AuthMode != mode {
+	if e.auth.ModeLocked() && e.cfg.AuthMode != mode {
 		fmt.Fprintf(stderr, "Note: %s is set to %s and takes precedence until it is removed.\n", config.EnvAuthMode, e.cfg.AuthMode)
 	}
 	return nil
@@ -203,19 +203,5 @@ func yesNo(b bool) string {
 }
 
 func randomPassword() (string, error) {
-	// 256 is not a multiple of the alphabet size, so bytes above the limit are skipped to keep every character equally likely.
-	limit := 256 - 256%len(generatedPasswordChars)
-	out := make([]byte, 0, generatedPasswordLen)
-	buf := make([]byte, 2*generatedPasswordLen)
-	for len(out) < generatedPasswordLen {
-		if _, err := rand.Read(buf); err != nil {
-			return "", fmt.Errorf("generate password: %w", err)
-		}
-		for _, b := range buf {
-			if int(b) < limit && len(out) < generatedPasswordLen {
-				out = append(out, generatedPasswordChars[int(b)%len(generatedPasswordChars)])
-			}
-		}
-	}
-	return string(out), nil
+	return auth.RandomString(generatedPasswordChars, generatedPasswordLen)
 }

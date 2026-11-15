@@ -23,7 +23,6 @@
   "tanks_type_other": "Other",
   "tanks_volume": "Volume",
   "tanks_volume_hint": "Optional. Leave it empty if you are not sure.",
-  "tanks_volume_positive": "Enter a volume above zero.",
   "tanks_started_on": "Start date",
   "tanks_note": "Notes",
   "tanks_presets": "Parameters to track",

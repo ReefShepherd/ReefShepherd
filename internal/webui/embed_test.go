@@ -4,11 +4,13 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 )
 
 func TestEmbeddedHandlerServesAPage(t *testing.T) {
 	// The embedded dist holds the placeholder source until the web UI is built, and the app shell afterwards.
-	rec := get(Handler(), http.MethodGet, "/some/page")
+	rec := get(Handler(testutil.Logger(t)), http.MethodGet, "/some/page")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}

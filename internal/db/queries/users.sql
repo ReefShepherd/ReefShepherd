@@ -31,9 +31,13 @@ SELECT
     u.disabled,
     CAST(u.password_hash IS NOT NULL AS INTEGER) AS has_password,
     CAST(t.confirmed_at IS NOT NULL AS INTEGER) AS totp_enabled,
+    CAST(COALESCE(p.theme, 'system') AS TEXT) AS theme,
+    CAST(COALESCE(p.locale, 'en') AS TEXT) AS locale,
+    p.default_tank_id,
     u.created_at
 FROM users AS u
 LEFT JOIN user_totp AS t ON t.user_id = u.id
+LEFT JOIN user_preferences AS p ON p.user_id = u.id
 ORDER BY u.id;
 
 -- name: GetUserCredentialsByUsername :one
@@ -52,8 +56,8 @@ FROM users
 WHERE username = ?;
 
 -- name: CreateUser :one
-INSERT INTO users (username, display_name, email, password_hash, role, password_changed_at)
-VALUES (?, ?, ?, ?, ?, ?)
+INSERT INTO users (username, display_name, email, role, created_at, updated_at)
+VALUES (sqlc.arg(username), sqlc.arg(display_name), sqlc.arg(email), sqlc.arg(role), sqlc.arg(now), sqlc.arg(now))
 RETURNING id;
 
 -- name: UpdateUserAccount :exec
@@ -64,11 +68,6 @@ WHERE id = ?;
 -- name: UpdateUserProfile :exec
 UPDATE users
 SET display_name = ?, email = ?, updated_at = ?
-WHERE id = ?;
-
--- name: SetUserPassword :exec
-UPDATE users
-SET password_hash = ?, password_changed_at = ?, updated_at = ?
 WHERE id = ?;
 
 -- name: DeleteUser :execrows
@@ -100,11 +99,6 @@ SET theme = excluded.theme,
     locale = excluded.locale,
     default_tank_id = excluded.default_tank_id,
     updated_at = excluded.updated_at;
-
--- name: RehashPassword :execrows
-UPDATE users
-SET password_hash = ?
-WHERE id = ? AND password_hash = ?;
 
 -- name: FirstOtherEnabledAdminID :one
 SELECT id

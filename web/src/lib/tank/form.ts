@@ -1,6 +1,13 @@
 import type { UnitFamily } from '#lib/api/settings.js';
 import type { NewTank, Tank, TankChanges, TankType } from '#lib/api/tanks.js';
 import { decimalText, parseDecimal } from '#lib/format/decimal.js';
+import type { FieldCode, FieldErrors } from '#lib/forms/codes.js';
+import {
+  collectErrors,
+  validateMaxLength,
+  validateName,
+  validateOptionalNumber
+} from '#lib/forms/validation.js';
 
 export const tankNameMax = 100;
 export const tankNoteMax = 10000;
@@ -25,31 +32,24 @@ export function draftFromTank(tank: Tank | undefined): TankDraft {
   };
 }
 
-export interface TankProblems {
-  name?: 'required' | 'too_long';
-  volume?: 'invalid_number' | 'not_positive';
-  note?: 'too_long';
-}
+const volumeCode = (text: string): FieldCode | null => {
+  const code = validateOptionalNumber(text);
+  if (code !== null || text.trim() === '') return code;
+  return (parseDecimal(text) ?? 0) > 0 ? null : 'out_of_range';
+};
 
-const length = (text: string) => [...text].length;
-
-export function tankProblems(draft: TankDraft): TankProblems {
-  const problems: TankProblems = {};
-  const name = draft.name.trim();
-  if (name === '') problems.name = 'required';
-  else if (length(name) > tankNameMax) problems.name = 'too_long';
-  if (draft.volume.trim() !== '') {
-    const volume = parseDecimal(draft.volume);
-    if (volume === null) problems.volume = 'invalid_number';
-    else if (volume <= 0) problems.volume = 'not_positive';
-  }
-  if (length(draft.note) > tankNoteMax) problems.note = 'too_long';
-  return problems;
+/** The fields of the tank draft that cannot be saved, keyed by the server's field names. */
+export function validateTank(draft: TankDraft): FieldErrors {
+  return collectErrors({
+    name: validateName(draft.name, tankNameMax),
+    volume: volumeCode(draft.volume),
+    note: validateMaxLength(draft.note, tankNoteMax)
+  });
 }
 
 const volumeOf = (text: string) => (text.trim() === '' ? null : parseDecimal(text));
 
-/** The request that creates a tank with the chosen presets; the draft must have passed tankProblems. */
+/** The request that creates a tank with the chosen presets; the draft must have passed validateTank. */
 export function newTankBody(draft: TankDraft, presets: readonly string[]): NewTank {
   return {
     name: draft.name.trim(),

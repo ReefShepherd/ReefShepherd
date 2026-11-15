@@ -1,5 +1,6 @@
 import type { ResultChanges, TestResult } from '#lib/api/params.js';
 import { decimalText, parseDecimal } from '#lib/format/decimal.js';
+import type { FieldErrors } from '#lib/forms/codes.js';
 import { fromLocalInput, toLocalInput } from '#lib/format/local-time.js';
 
 /** What the inline edit form holds for a result, as typed. */
@@ -24,7 +25,8 @@ export function draftFromResult(
 
 export interface ResultEdit {
   changes: ResultChanges;
-  problems: { value?: 'invalid_number'; measuredAt?: 'invalid_time' };
+  /** The fields that cannot be saved, keyed by the server's field names. */
+  errors: FieldErrors;
 }
 
 /** The fields of a result the draft changes; fields left as they were are not sent. */
@@ -34,18 +36,18 @@ export function resultChanges(
   timeZone: string
 ): ResultEdit {
   const changes: ResultChanges = {};
-  const problems: ResultEdit['problems'] = {};
+  const errors: FieldErrors = {};
 
   const value = parseDecimal(draft.value);
-  if (value === null) problems.value = 'invalid_number';
+  if (value === null) errors.value = 'invalid';
   else if (value !== result.value) changes.value = value;
 
   if (draft.measuredAt !== toLocalInput(result.measured_at, timeZone)) {
     const instant = fromLocalInput(draft.measuredAt, timeZone);
-    if (instant === null) problems.measuredAt = 'invalid_time';
+    if (instant === null) errors.measured_at = 'invalid';
     else changes.measured_at = instant;
   }
 
   if (draft.note.trim() !== result.note) changes.note = draft.note.trim();
-  return { changes, problems };
+  return { changes, errors };
 }

@@ -4,8 +4,8 @@ FROM settings
 WHERE key = ?;
 
 -- name: SetSetting :exec
-INSERT INTO settings (key, value)
-VALUES (?, ?)
+INSERT INTO settings (key, value, updated_at)
+VALUES (?, ?, ?)
 ON CONFLICT (key) DO UPDATE
 SET value = excluded.value, updated_at = excluded.updated_at;
 

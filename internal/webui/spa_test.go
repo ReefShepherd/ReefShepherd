@@ -1,13 +1,20 @@
 package webui
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 )
 
 const (
@@ -52,7 +59,7 @@ func sha(s string) string {
 }
 
 func TestPlaceholderWhenNotBuilt(t *testing.T) {
-	h := NewHandler(fstest.MapFS{".gitkeep": {}})
+	h := NewHandler(fstest.MapFS{".gitkeep": {}}, testutil.Logger(t))
 	for _, target := range []string{"/", "/tanks/3/charts/5", "/login"} {
 		rec := get(h, http.MethodGet, target)
 		if rec.Code != http.StatusOK {
@@ -74,21 +81,21 @@ func TestPlaceholderWhenNotBuilt(t *testing.T) {
 }
 
 func TestPlaceholderHeadHasNoBody(t *testing.T) {
-	rec := get(NewHandler(fstest.MapFS{}), http.MethodHead, "/")
+	rec := get(NewHandler(fstest.MapFS{}, testutil.Logger(t)), http.MethodHead, "/")
 	if rec.Code != http.StatusOK || rec.Body.Len() != 0 {
 		t.Errorf("status=%d body=%q", rec.Code, rec.Body.String())
 	}
 }
 
 func TestUnbuiltUIStill404sMissingFiles(t *testing.T) {
-	rec := get(NewHandler(fstest.MapFS{".gitkeep": {}}), http.MethodGet, "/favicon.ico")
+	rec := get(NewHandler(fstest.MapFS{".gitkeep": {}}, testutil.Logger(t)), http.MethodGet, "/favicon.ico")
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d", rec.Code)
 	}
 }
 
 func TestDeepLinksGetTheAppShell(t *testing.T) {
-	h := NewHandler(builtUI())
+	h := NewHandler(builtUI(), testutil.Logger(t))
 	for _, target := range []string{"/", "/tanks/3/charts/5", "/login"} {
 		rec := get(h, http.MethodGet, target)
 		if rec.Code != http.StatusOK || rec.Body.String() != shellBody {
@@ -104,7 +111,7 @@ func TestDeepLinksGetTheAppShell(t *testing.T) {
 }
 
 func TestShellPolicyComesFromTheMetaTag(t *testing.T) {
-	h := NewHandler(builtUI())
+	h := NewHandler(builtUI(), testutil.Logger(t))
 	if got := get(h, http.MethodGet, "/settings").Header().Get("Content-Security-Policy"); got != shellCSP {
 		t.Errorf("csp = %q, want %q", got, shellCSP)
 	}
@@ -116,7 +123,7 @@ func TestShellPolicyComesFromTheMetaTag(t *testing.T) {
 
 func TestShellPolicyIsDecodedFromHTMLEntities(t *testing.T) {
 	page := `<meta http-equiv="content-security-policy" content="script-src &#39;self&#39;">`
-	h := NewHandler(fstest.MapFS{"200.html": {Data: []byte(page)}})
+	h := NewHandler(fstest.MapFS{"200.html": {Data: []byte(page)}}, testutil.Logger(t))
 	want := "script-src 'self'; frame-ancestors 'none'"
 	if got := get(h, http.MethodGet, "/").Header().Get("Content-Security-Policy"); got != want {
 		t.Errorf("csp = %q, want %q", got, want)
@@ -124,14 +131,14 @@ func TestShellPolicyIsDecodedFromHTMLEntities(t *testing.T) {
 }
 
 func TestShellWithoutMetaPolicySendsNoHeader(t *testing.T) {
-	h := NewHandler(fstest.MapFS{"200.html": {Data: []byte("<html></html>")}})
+	h := NewHandler(fstest.MapFS{"200.html": {Data: []byte("<html></html>")}}, testutil.Logger(t))
 	if got := get(h, http.MethodGet, "/").Header().Get("Content-Security-Policy"); got != "" {
 		t.Errorf("csp = %q", got)
 	}
 }
 
 func TestCacheControl(t *testing.T) {
-	h := NewHandler(builtUI())
+	h := NewHandler(builtUI(), testutil.Logger(t))
 	cases := map[string]string{
 		"/_app/immutable/entry/start.abc.js": "public, max-age=31536000, immutable",
 		"/_app/version.json":                 "no-cache",
@@ -147,7 +154,7 @@ func TestCacheControl(t *testing.T) {
 }
 
 func TestPrecompressedSelection(t *testing.T) {
-	h := NewHandler(builtUI())
+	h := NewHandler(builtUI(), testutil.Logger(t))
 	const js = "/_app/immutable/entry/start.abc.js"
 	cases := []struct {
 		name, target, acceptEncoding, wantEncoding, wantBody string
@@ -157,6 +164,7 @@ func TestPrecompressedSelection(t *testing.T) {
 		{"br only", js, "br", "br", "js-br"},
 		{"br preferred over gzip", js, "gzip, deflate, br", "br", "js-br"},
 		{"refused with q=0", js, "br;q=0, gzip", "gzip", "js-gz"},
+		{"refused with Q=0", js, "br;Q=0, gzip", "gzip", "js-gz"},
 		{"unrelated coding", js, "deflate, zstd", "", "console.log(1)"},
 		{"no sibling for the coding", "/favicon.svg", "br", "", "<svg/>"},
 		{"sibling for gzip only", "/favicon.svg", "br, gzip", "gzip", "svg-gz"},
@@ -179,7 +187,7 @@ func TestPrecompressedSelection(t *testing.T) {
 }
 
 func TestPrecompressedKeepsTheOriginalContentType(t *testing.T) {
-	h := NewHandler(builtUI())
+	h := NewHandler(builtUI(), testutil.Logger(t))
 	cases := map[string]string{
 		"/_app/immutable/entry/start.abc.js": "javascript",
 		"/favicon.svg":                       "image/svg+xml",
@@ -194,21 +202,21 @@ func TestPrecompressedKeepsTheOriginalContentType(t *testing.T) {
 }
 
 func TestPrecompressedFileOfUnknownTypeIsNotSniffed(t *testing.T) {
-	rec := get(NewHandler(builtUI()), http.MethodGet, "/blob.zzz", "Accept-Encoding", "gzip")
+	rec := get(NewHandler(builtUI(), testutil.Logger(t)), http.MethodGet, "/blob.zzz", "Accept-Encoding", "gzip")
 	if got := rec.Header().Get("Content-Type"); got != "application/octet-stream" {
 		t.Errorf("content type = %q", got)
 	}
 }
 
 func TestPrecompressedHeadHasNoBody(t *testing.T) {
-	rec := get(NewHandler(builtUI()), http.MethodHead, "/favicon.svg", "Accept-Encoding", "gzip")
+	rec := get(NewHandler(builtUI(), testutil.Logger(t)), http.MethodHead, "/favicon.svg", "Accept-Encoding", "gzip")
 	if rec.Code != http.StatusOK || rec.Body.Len() != 0 || rec.Header().Get("Content-Encoding") != "gzip" {
 		t.Errorf("status=%d body=%q encoding=%q", rec.Code, rec.Body.String(), rec.Header().Get("Content-Encoding"))
 	}
 }
 
 func TestETagAndConditionalRequests(t *testing.T) {
-	h := NewHandler(builtUI())
+	h := NewHandler(builtUI(), testutil.Logger(t))
 
 	for _, target := range []string{"/deep/link", "/favicon.svg", "/_app/immutable/entry/start.abc.js"} {
 		rec := get(h, http.MethodGet, target)
@@ -230,14 +238,14 @@ func TestETagAndConditionalRequests(t *testing.T) {
 }
 
 func TestShellETagIsTheHashOfTheShell(t *testing.T) {
-	h := NewHandler(builtUI())
+	h := NewHandler(builtUI(), testutil.Logger(t))
 	if got, want := get(h, http.MethodGet, "/deep/link").Header().Get("ETag"), `"`+sha(shellBody)+`"`; got != want {
 		t.Errorf("etag = %q, want %q", got, want)
 	}
 }
 
 func TestETagDiffersPerEncodingAndPerContent(t *testing.T) {
-	h := NewHandler(builtUI())
+	h := NewHandler(builtUI(), testutil.Logger(t))
 	const target = "/_app/immutable/entry/start.abc.js"
 	plain := get(h, http.MethodGet, target).Header().Get("ETag")
 	br := get(h, http.MethodGet, target, "Accept-Encoding", "br").Header().Get("ETag")
@@ -258,7 +266,7 @@ func TestETagDiffersPerEncodingAndPerContent(t *testing.T) {
 }
 
 func TestMissingFilesAre404(t *testing.T) {
-	h := NewHandler(builtUI())
+	h := NewHandler(builtUI(), testutil.Logger(t))
 	targets := []string{
 		"/favicon.ico", "/missing.png", "/some/dir/missing.css", "/_app/immutable/entry/gone.js",
 		"/_app/unknown", "/robots.txt", "/200.html", "/.gitkeep", "/sub/.hidden", "/.env",
@@ -275,7 +283,7 @@ func TestMissingFilesAre404(t *testing.T) {
 }
 
 func TestAPIPathsNeverFallThroughToTheShell(t *testing.T) {
-	h := NewHandler(builtUI())
+	h := NewHandler(builtUI(), testutil.Logger(t))
 	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost} {
 		for _, target := range []string{"/api", "/api/", "/api/v1/me", "/api/v1/tanks/3", "/api/leak.txt", "/api/../api/x"} {
 			rec := get(h, method, target)
@@ -294,7 +302,7 @@ func TestAPIPathsNeverFallThroughToTheShell(t *testing.T) {
 }
 
 func TestOnlyGetAndHead(t *testing.T) {
-	h := NewHandler(builtUI())
+	h := NewHandler(builtUI(), testutil.Logger(t))
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
 		for _, target := range []string{"/", "/deep/link", "/favicon.svg"} {
 			rec := get(h, method, target)
@@ -318,7 +326,7 @@ func TestMIMETypes(t *testing.T) {
 		"app.css":              {Data: []byte("a{}")},
 		"data.json":            {Data: []byte("{}")},
 		"logo.svg":             {Data: []byte("<svg/>")},
-	})
+	}, testutil.Logger(t))
 	cases := map[string]string{
 		"/manifest.webmanifest": "application/manifest+json",
 		"/font.woff2":           "font/woff2",
@@ -334,11 +342,85 @@ func TestMIMETypes(t *testing.T) {
 	}
 }
 
+// diskFS resolves names against a directory without validating them, like a naive file server, and records every name it is asked for.
+type diskFS struct {
+	root string
+	seen []string
+}
+
+func (d *diskFS) Open(name string) (fs.File, error) {
+	d.seen = append(d.seen, name)
+	return os.Open(filepath.Join(d.root, name))
+}
+
+// traversalSite lays out a served directory with a secret file one level above it.
+func traversalSite(t *testing.T) *diskFS {
+	t.Helper()
+	parent := t.TempDir()
+	root := filepath.Join(parent, "site")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		filepath.Join(parent, "secret.txt"): "root:secret",
+		filepath.Join(root, "200.html"):     shellBody,
+		filepath.Join(root, "favicon.svg"):  "<svg/>",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(name, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return &diskFS{root: root}
+}
+
 func TestPathTraversalStaysInsideTheFS(t *testing.T) {
-	for _, target := range []string{"/../../etc/passwd", "/..%2f..%2fetc/passwd", "/_app/../../etc/passwd"} {
-		rec := get(NewHandler(builtUI()), http.MethodGet, target)
+	site := traversalSite(t)
+	h := NewHandler(site, testutil.Logger(t))
+	for _, target := range []string{"/../secret.txt", "/..%2fsecret.txt", "/_app/../../secret.txt", "/a/b/../../../secret.txt"} {
+		rec := get(h, http.MethodGet, target)
 		if strings.Contains(rec.Body.String(), "root:") {
-			t.Errorf("%s escaped the filesystem", target)
+			t.Errorf("%s escaped the filesystem: %q", target, rec.Body.String())
+		}
+	}
+	for _, name := range site.seen {
+		if !fs.ValidPath(name) {
+			t.Errorf("filesystem asked for the invalid name %q", name)
+		}
+	}
+}
+
+func TestIsFileRejectsNamesOutsideTheFS(t *testing.T) {
+	h := &handler{fsys: traversalSite(t)}
+	for _, name := range []string{"../secret.txt", "favicon.svg/../../secret.txt", "/favicon.svg", "", "."} {
+		if h.isFile(name) {
+			t.Errorf("isFile(%q) = true", name)
+		}
+	}
+	if !h.isFile("favicon.svg") {
+		t.Error("isFile(favicon.svg) = false")
+	}
+}
+
+func TestMissingShellPolicyIsWarnedAboutOnce(t *testing.T) {
+	cases := []struct {
+		name string
+		fsys fs.FS
+		warn bool
+	}{
+		{"shell without a policy", fstest.MapFS{"200.html": {Data: []byte("<html></html>")}}, true},
+		{"shell with a policy", builtUI(), false},
+		{"ui not built", fstest.MapFS{".gitkeep": {}}, false},
+	}
+	for _, c := range cases {
+		var buf bytes.Buffer
+		NewHandler(c.fsys, slog.New(slog.NewTextHandler(&buf, nil)))
+		out := buf.String()
+		if c.warn != strings.Contains(out, "level=WARN") || c.warn != strings.Contains(out, "content security policy") {
+			t.Errorf("%s: warn=%v, log = %q", c.name, c.warn, out)
+		}
+		if n := strings.Count(out, "\n"); n > 1 {
+			t.Errorf("%s: %d log lines", c.name, n)
 		}
 	}
 }
@@ -354,6 +436,10 @@ func TestAcceptsEncoding(t *testing.T) {
 		{"gzip, br", "br", true},
 		{"gzip;q=0.5, br;q=1", "br", true},
 		{"br;q=0", "br", false},
+		{"br;Q=0", "br", false},
+		{"BR; Q=0.0", "br", false},
+		{"gzip, br;Q=0", "br", false},
+		{"br;Q=0.1", "br", true},
 		{"br; q=0.0", "br", false},
 		{"br;q=0.1", "br", true},
 		{"gzip", "br", false},

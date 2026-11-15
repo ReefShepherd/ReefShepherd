@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/reefshepherd/reefshepherd/internal/config"
+	"github.com/reefshepherd/reefshepherd/internal/httpx"
 	"github.com/reefshepherd/reefshepherd/internal/units"
 )
 
@@ -25,7 +26,7 @@ func TestDisplayFamiliesExcludeFixed(t *testing.T) {
 
 func TestValuesFillsInDefaults(t *testing.T) {
 	s, _ := newStore(t)
-	v, err := s.Values(t.Context())
+	v, err := s.GetValues(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,31 +38,43 @@ func TestValuesFillsInDefaults(t *testing.T) {
 	}
 }
 
-func TestValidateNamesEveryBadField(t *testing.T) {
+// fieldCodes returns the field problems err carries, keyed by API field name.
+func fieldCodes(err error) map[string]string {
+	var f httpx.FieldErrors
+	f.AddFrom(err)
+	return httpx.Validation(f).Fields
+}
+
+func TestValidateNamesEveryBadFieldWithItsCode(t *testing.T) {
 	blank, tz, hhmm := " ", "Mars/Base", "7:5"
-	got := Changes{
+	err := Changes{
 		InstanceName: &blank, Timezone: &tz, ReminderDefaultTime: &hhmm,
 		Units: map[units.Family]units.Unit{units.Temperature: "kelvin", units.Fixed: "x", units.Volume: units.USGallon},
 	}.Validate()
-	for _, field := range []string{"instance_name", "timezone", "reminder_default_time", "units.temperature", "units.fixed"} {
-		if got[field] == "" {
-			t.Errorf("no message for %s: %v", field, got)
+	want := map[string]string{
+		"instance_name": "required", "timezone": "invalid", "reminder_default_time": "invalid",
+		"units.temperature": "invalid", "units.fixed": "invalid",
+	}
+	got := fieldCodes(err)
+	if len(got) != len(want) {
+		t.Fatalf("codes = %v, want %v", got, want)
+	}
+	for field, code := range want {
+		if got[field] != code {
+			t.Errorf("codes = %v, want %v", got, want)
 		}
 	}
-	if _, bad := got["units.volume"]; bad || len(got) != 5 {
-		t.Errorf("messages = %v", got)
-	}
-	if len(Changes{}.Validate()) != 0 {
-		t.Error("an empty change set is valid")
+	if err := (Changes{}).Validate(); err != nil {
+		t.Errorf("an empty change set is valid, got %v", err)
 	}
 }
 
 func TestApplyWritesNothingWhenAnyFieldIsInvalid(t *testing.T) {
 	s, d := newStore(t)
 	name, tz := "Fine", "Mars/Base"
-	rejected, err := s.Apply(t.Context(), Changes{InstanceName: &name, Timezone: &tz})
-	if err != nil || rejected["timezone"] == "" {
-		t.Fatalf("rejected=%v err=%v", rejected, err)
+	err := s.Apply(t.Context(), Changes{InstanceName: &name, Timezone: &tz})
+	if got := fieldCodes(err); len(got) != 1 || got["timezone"] != "invalid" {
+		t.Fatalf("err=%v, want only timezone: invalid", err)
 	}
 	if _, ok := storedValue(t, d, "instance_name"); ok {
 		t.Error("the valid field was written next to an invalid one")
@@ -69,11 +82,10 @@ func TestApplyWritesNothingWhenAnyFieldIsInvalid(t *testing.T) {
 
 	tz = "Europe/Berlin"
 	hhmm := "06:45"
-	rejected, err = s.Apply(t.Context(), Changes{InstanceName: &name, Timezone: &tz, ReminderDefaultTime: &hhmm, Units: map[units.Family]units.Unit{units.Phosphate: units.PPB}})
-	if err != nil || rejected == nil || len(rejected) != 0 {
-		t.Fatalf("rejected=%v err=%v; want a non-nil empty map", rejected, err)
+	if err := s.Apply(t.Context(), Changes{InstanceName: &name, Timezone: &tz, ReminderDefaultTime: &hhmm, Units: map[units.Family]units.Unit{units.Phosphate: units.PPB}}); err != nil {
+		t.Fatal(err)
 	}
-	v, _ := s.Values(t.Context())
+	v, _ := s.GetValues(t.Context())
 	if v.InstanceName != "Fine" || v.Timezone != tz || v.ReminderDefaultTime != hhmm || v.Units[units.Phosphate] != units.PPB {
 		t.Errorf("values = %+v", v)
 	}
@@ -90,15 +102,15 @@ func TestSwitchAuthMode(t *testing.T) {
 	}
 
 	// Nobody to act as, nobody who can sign in.
-	if err := s.SwitchAuthMode(ctx, config.AuthModeDisabled); !errors.Is(err, ErrInvalid) {
-		t.Errorf("disable with no admin: %v", err)
+	refused := func(name string, err error) {
+		t.Helper()
+		if got := fieldCodes(err); !errors.Is(err, ErrInvalid) || len(got) != 1 || got["auth_mode"] != "invalid" {
+			t.Errorf("%s: %v, want an ErrInvalid for auth_mode with code invalid", name, err)
+		}
 	}
-	if err := s.SwitchAuthMode(ctx, config.AuthModePassword); !errors.Is(err, ErrInvalid) {
-		t.Errorf("enable with no admin: %v", err)
-	}
-	if err := s.SwitchAuthMode(ctx, "oidc"); !errors.Is(err, ErrInvalid) {
-		t.Errorf("unknown mode: %v", err)
-	}
+	refused("disable with no admin", s.SwitchAuthMode(ctx, config.AuthModeDisabled))
+	refused("enable with no admin", s.SwitchAuthMode(ctx, config.AuthModePassword))
+	refused("unknown mode", s.SwitchAuthMode(ctx, "oidc"))
 
 	exec(`INSERT INTO users (id, username, role, disabled) VALUES (1, 'off', 'admin', 1)`)
 	exec(`INSERT INTO users (id, username, role) VALUES (2, 'member', 'member')`)
@@ -124,9 +136,7 @@ func TestSwitchAuthMode(t *testing.T) {
 	}
 	exec(`UPDATE users SET password_hash = NULL WHERE id = 4`)
 	exec(`UPDATE users SET password_hash = 'x', disabled = 1 WHERE id = 3`)
-	if err := s.SwitchAuthMode(ctx, config.AuthModePassword); !errors.Is(err, ErrInvalid) {
-		t.Errorf("only a disabled admin has a password: %v", err)
-	}
+	refused("only a disabled admin has a password", s.SwitchAuthMode(ctx, config.AuthModePassword))
 }
 
 func TestWithTxCommitsAndRollsBackTogether(t *testing.T) {
@@ -161,5 +171,51 @@ func TestWithTxCommitsAndRollsBackTogether(t *testing.T) {
 	}
 	if got, _ := s.GetInstanceName(t.Context()); got != "Committed" {
 		t.Errorf("committed write = %q", got)
+	}
+}
+
+func TestUnitConvertersRoundTrip(t *testing.T) {
+	in := map[units.Family]units.Unit{units.Temperature: units.Fahrenheit, units.Salinity: units.PPT}
+	strs := UnitsToStrings(in)
+	if len(strs) != 2 || strs["temperature"] != "f" || strs["salinity"] != "ppt" {
+		t.Errorf("strings = %v", strs)
+	}
+	back := UnitsFromStrings(strs)
+	if len(back) != 2 || back[units.Temperature] != units.Fahrenheit || back[units.Salinity] != units.PPT {
+		t.Errorf("round trip = %v", back)
+	}
+	if got := UnitsFromStrings(nil); got == nil || len(got) != 0 {
+		t.Errorf("nil input = %v, want an empty map", got)
+	}
+	if got := UnitsToStrings(nil); got == nil || len(got) != 0 {
+		t.Errorf("nil input = %v, want an empty map", got)
+	}
+	// Unknown names pass through for the validation to refuse.
+	if got := UnitsFromStrings(map[string]string{"mystery": "x"}); got["mystery"] != "x" {
+		t.Errorf("unknown family = %v", got)
+	}
+}
+
+func TestUpdateReportsEveryRejectedFieldTogether(t *testing.T) {
+	s, d := newStore(t)
+	ctx := t.Context()
+	bad := "Mars/Base"
+	name := "New Name"
+	err := s.Update(ctx, Changes{Timezone: &bad, InstanceName: &name}, config.AuthModeDisabled, "invalid x")
+	var fields httpx.FieldErrors
+	if !fields.AddFrom(err) || fields.Message != "invalid x" {
+		t.Fatalf("err = %v, want field errors with the summary", err)
+	}
+	if got := fieldCodes(err); len(got) != 2 || got["timezone"] != "invalid" || got["auth_mode"] != "invalid" {
+		t.Errorf("codes = %v, want timezone and auth_mode (there is no admin to act as)", got)
+	}
+	if _, ok := storedValue(t, d, "instance_name"); ok {
+		t.Error("a rejected update wrote the valid field")
+	}
+	if err := s.Update(ctx, Changes{InstanceName: &name}, "", "unused"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetInstanceName(ctx); got != name {
+		t.Errorf("instance name = %q", got)
 	}
 }

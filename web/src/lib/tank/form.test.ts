@@ -5,7 +5,7 @@ import {
   draftFromTank,
   newTankBody,
   tankChanges,
-  tankProblems,
+  validateTank,
   volumeUnitLabel,
   type TankDraft
 } from './form.js';
@@ -46,18 +46,23 @@ describe('draftFromTank', () => {
   });
 });
 
-describe('tankProblems', () => {
+describe('validateTank', () => {
   it('requires a name of at most 100 characters', () => {
-    expect(tankProblems(draft({ name: '  ' })).name).toBe('required');
-    expect(tankProblems(draft({ name: 'x'.repeat(101) })).name).toBe('too_long');
-    expect(tankProblems(draft({ name: 'x'.repeat(100) })).name).toBeUndefined();
+    expect(validateTank(draft({ name: '  ' })).name).toBe('required');
+    expect(validateTank(draft({ name: 'x'.repeat(101) })).name).toBe('too_long');
+    expect(validateTank(draft({ name: 'x'.repeat(100) })).name).toBeUndefined();
+  });
+
+  it('limits the note to 10000 characters', () => {
+    expect(validateTank(draft({ note: 'x'.repeat(10000) })).note).toBeUndefined();
+    expect(validateTank(draft({ note: 'x'.repeat(10001) })).note).toBe('too_long');
   });
 
   it('accepts an empty volume, a decimal comma, and refuses zero or text', () => {
-    expect(tankProblems(draft({ volume: '' })).volume).toBeUndefined();
-    expect(tankProblems(draft({ volume: '37,5' })).volume).toBeUndefined();
-    expect(tankProblems(draft({ volume: '0' })).volume).toBe('not_positive');
-    expect(tankProblems(draft({ volume: 'big' })).volume).toBe('invalid_number');
+    expect(validateTank(draft({ volume: '' })).volume).toBeUndefined();
+    expect(validateTank(draft({ volume: '37,5' })).volume).toBeUndefined();
+    expect(validateTank(draft({ volume: '0' })).volume).toBe('out_of_range');
+    expect(validateTank(draft({ volume: 'big' })).volume).toBe('invalid');
   });
 });
 

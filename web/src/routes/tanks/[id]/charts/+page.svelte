@@ -1,15 +1,17 @@
 <script lang="ts">
-  import { page } from '$app/state';
   import { errorText } from '#lib/api/error-text.js';
   import { paramsApi, type TankParameter } from '#lib/api/params.js';
+  import { tankPath } from '#lib/api/tank-id.js';
   import Alert from '#lib/components/forms/Alert.svelte';
   import CardFrame from '#lib/components/dashboard/CardFrame.svelte';
   import { newCard } from '#lib/components/dashboard/cards.js';
   import { provideDashboard } from '#lib/components/dashboard/context.js';
   import PageTitle from '#lib/components/shell/PageTitle.svelte';
   import { m } from '#lib/paraglide/messages.js';
+  import type { PageProps } from './$types';
 
-  const tankId = $derived(page.params.id ?? '');
+  let { data }: PageProps = $props();
+  const tankId = $derived(data.tankId);
 
   let parameters = $state.raw<TankParameter[] | null>(null);
   let failure = $state('');
@@ -57,7 +59,7 @@
   <p class="muted">{m.loading()}</p>
 {:else if cards.length === 0}
   <p class="muted">{m.charts_none_enabled()}</p>
-  <p><a href="/tanks/{encodeURIComponent(tankId)}/settings">{m.charts_none_enabled_link()}</a></p>
+  <p><a href={tankPath(tankId, 'settings')}>{m.charts_none_enabled_link()}</a></p>
 {:else}
   <p class="muted">{m.charts_intro()}</p>
   <ul class="grid">

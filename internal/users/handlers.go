@@ -1,6 +1,7 @@
 package users
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/reefshepherd/reefshepherd/internal/auth"
@@ -10,16 +11,17 @@ import (
 // PublicRoutes registers the endpoints that work before anyone is signed in.
 func PublicRoutes(mux *http.ServeMux, deps Deps) {
 	svc := NewService(deps)
-	mux.HandleFunc("POST /api/v1/setup", svc.handle(svc.setup))
+	mux.Handle("POST /api/v1/setup", httpx.Handle(svc.Logger, svc.setup, auth.APIError, apiError))
 }
 
 // Routes registers the user endpoints; the caller wraps mux in the sign-in check, and the user management routes also require an admin.
 func Routes(mux *http.ServeMux, deps Deps) {
 	svc := NewService(deps)
-	admin := func(h handlerFunc) http.Handler { return auth.RequireAdmin(svc.handle(h)) }
+	handle := func(h httpx.HandlerFunc) http.Handler { return httpx.Handle(svc.Logger, h, apiError) }
+	admin := func(h httpx.HandlerFunc) http.Handler { return auth.RequireAdmin(handle(h)) }
 
-	mux.HandleFunc("GET /api/v1/me", svc.handle(svc.getMe))
-	mux.HandleFunc("PATCH /api/v1/me", svc.handle(svc.patchMe))
+	mux.Handle("GET /api/v1/me", handle(svc.getMe))
+	mux.Handle("PATCH /api/v1/me", handle(svc.patchMe))
 	mux.Handle("GET /api/v1/users", admin(svc.listUsers))
 	mux.Handle("POST /api/v1/users", admin(svc.createUser))
 	mux.Handle("PATCH /api/v1/users/{id}", admin(svc.patchUser))
@@ -27,14 +29,17 @@ func Routes(mux *http.ServeMux, deps Deps) {
 	mux.Handle("POST /api/v1/users/{id}/reset-mfa", admin(svc.resetMFA))
 }
 
-type handlerFunc func(w http.ResponseWriter, r *http.Request) error
-
-func (s *Service) handle(h handlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if err := h(w, r); err != nil {
-			httpx.Fail(s.Logger, w, r, err)
+// apiError gives the package's refusals their HTTP form.
+func apiError(err error) error {
+	if errors.Is(err, errUserNotFound) {
+		return httpx.NotFound(errUserNotFound.Error())
+	}
+	for _, conflict := range []error{errLastAdmin, errDisableSelf, errDeleteSelf, errSetupDone} {
+		if errors.Is(err, conflict) {
+			return httpx.Conflict(conflict.Error())
 		}
 	}
+	return err
 }
 
 func pathUserID(r *http.Request) (int64, error) {
@@ -88,7 +93,7 @@ func (s *Service) listUsers(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	httpx.WriteJSON(w, http.StatusOK, users)
+	httpx.List(w, http.StatusOK, users)
 	return nil
 }
 

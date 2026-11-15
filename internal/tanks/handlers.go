@@ -2,19 +2,18 @@ package tanks
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
 )
 
-type handlerFunc func(w http.ResponseWriter, r *http.Request) error
-
-func (s *Service) handle(h handlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if err := h(w, r); err != nil {
-			httpx.Fail(s.Logger, w, r, err)
-		}
+// apiError gives ErrNotFound its HTTP form.
+func apiError(err error) error {
+	if errors.Is(err, ErrNotFound) {
+		return httpx.NotFound(ErrNotFound.Error())
 	}
+	return err
 }
 
 func pathTankID(r *http.Request) (int64, error) {
@@ -34,7 +33,7 @@ func (s *Service) listTanks(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	httpx.WriteJSON(w, http.StatusOK, tanks)
+	httpx.List(w, http.StatusOK, tanks)
 	return nil
 }
 
@@ -85,22 +84,19 @@ type patchTankRequest struct {
 
 // input turns the request into an update, reporting a null for a field that cannot be cleared.
 func (req patchTankRequest) input() (UpdateInput, error) {
-	fields := map[string]string{}
+	fields := httpx.FieldErrors{Message: "invalid tank"}
 	required := func(field string, n httpx.Nullable[string]) *string {
 		if n.Set && n.Value == nil {
-			fields[field] = "must not be null"
+			fields.Add(field, httpx.CodeRequired)
 		}
 		return n.Value
 	}
 	in := UpdateInput{Name: required("name", req.Name), TankType: required("tank_type", req.TankType), Note: required("note", req.Note), Volume: req.Volume, StartedOn: req.StartedOn}
 	if req.SortOrder.Set && req.SortOrder.Value == nil {
-		fields["sort_order"] = "must not be null"
+		fields.Add("sort_order", httpx.CodeRequired)
 	}
 	in.SortOrder = req.SortOrder.Value
-	if len(fields) > 0 {
-		return UpdateInput{}, httpx.Validation("invalid tank", fields)
-	}
-	return in, nil
+	return in, fields.Err()
 }
 
 func (s *Service) patchTank(w http.ResponseWriter, r *http.Request) error {

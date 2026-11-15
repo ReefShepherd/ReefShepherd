@@ -49,7 +49,7 @@ type Deps struct {
 	Settings  Settings
 	Passwords *password.Hasher
 	Config    config.Config
-	// Logger receives the errors behind 500 responses; nil means slog.Default().
+	// Logger receives the errors behind 500 responses and the limiter's warnings.
 	Logger *slog.Logger
 }
 
@@ -63,18 +63,21 @@ type Service struct {
 // NewService builds the service; the same instance must serve every route so the rate limits are shared.
 func NewService(deps Deps) *Service {
 	s := &Service{Deps: deps, now: time.Now}
-	s.limiter = newLimiter(func() time.Time { return s.now() })
-	s.limiter.log = s.logger()
+	s.limiter = newLimiter(func() time.Time { return s.now() }, deps.Logger)
 	return s
 }
 
-func formatTime(t time.Time) string { return t.UTC().Format(db.TimeLayout) }
+// ErrEnvLocked is returned for a change to the login mode while the server environment decides it.
+var ErrEnvLocked = errors.New("the login mode is set by " + config.EnvAuthMode + " on the server")
 
-func parseTime(s string) (time.Time, error) { return time.Parse(db.TimeLayout, s) }
+// ModeLocked reports whether the server environment decides the login mode, so the stored setting cannot change it.
+func (s *Service) ModeLocked() bool {
+	return s.Config.AuthMode != ""
+}
 
 // EffectiveMode is the login mode in force: the environment override when set, else the stored setting.
 func (s *Service) EffectiveMode(ctx context.Context) (string, error) {
-	if s.Config.AuthMode != "" {
+	if s.ModeLocked() {
 		return s.Config.AuthMode, nil
 	}
 	mode, err := s.Settings.GetAuthMode(ctx)
@@ -111,7 +114,7 @@ func (s *Service) disabledModeUser(ctx context.Context) (httpx.User, bool, error
 		u, err := q.GetUserCredentialsByID(ctx, id)
 		switch {
 		case err == nil && u.Disabled == 0 && u.Role == httpx.RoleAdmin:
-			return httpx.User{ID: u.ID, Username: u.Username, DisplayName: u.DisplayName, Role: u.Role}, true, nil
+			return newUser(u.ID, u.Username, u.DisplayName, u.Role), true, nil
 		case err != nil && !errors.Is(err, sql.ErrNoRows):
 			return httpx.User{}, false, fmt.Errorf("read disabled-mode user: %w", err)
 		}
@@ -127,7 +130,11 @@ func (s *Service) disabledModeUser(ctx context.Context) (httpx.User, bool, error
 	if err != nil {
 		return httpx.User{}, false, fmt.Errorf("read first admin: %w", err)
 	}
-	return httpx.User{ID: u.ID, Username: u.Username, DisplayName: u.DisplayName, Role: u.Role}, true, nil
+	return newUser(u.ID, u.Username, u.DisplayName, u.Role), true, nil
+}
+
+func newUser(id int64, username, displayName, role string) httpx.User {
+	return httpx.User{ID: id, Username: username, DisplayName: displayName, Role: role}
 }
 
 func normalizeUsername(name string) string {

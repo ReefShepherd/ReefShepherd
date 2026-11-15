@@ -2,22 +2,19 @@ package users
 
 import (
 	"cmp"
+	"context"
 	"database/sql"
-	"errors"
 	"fmt"
-	"maps"
 	"net/http"
 	"slices"
 	"strings"
 
 	"github.com/reefshepherd/reefshepherd/internal/auth"
-	"github.com/reefshepherd/reefshepherd/internal/auth/password"
 	"github.com/reefshepherd/reefshepherd/internal/config"
 	"github.com/reefshepherd/reefshepherd/internal/db"
 	"github.com/reefshepherd/reefshepherd/internal/db/dbgen"
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
 	"github.com/reefshepherd/reefshepherd/internal/settings"
-	"github.com/reefshepherd/reefshepherd/internal/units"
 )
 
 // defaultAdminName is the account made when setup chooses to run without login.
@@ -34,39 +31,61 @@ type setupRequest struct {
 	Password     string            `json:"password"`
 }
 
-var errSetupDone = httpx.Conflict("setup has already been completed")
-
-// setup creates the first admin and the instance settings; only the first caller succeeds.
+// setup signs the first admin in when they chose a password, so setup flows straight into the app.
 func (s *Service) setup(w http.ResponseWriter, r *http.Request) error {
-	ctx := r.Context()
 	var req setupRequest
 	if err := httpx.DecodeJSON(r, &req); err != nil {
 		return err
 	}
-	// Refuse early so a closed instance never spends time hashing for strangers.
-	if required, err := s.Auth.SetupRequired(ctx); err != nil {
-		return err
-	} else if !required {
-		return errSetupDone
-	}
-
-	mode, fields, err := s.validateSetup(&req)
+	me, err := s.Setup(r.Context(), SetupInput(req))
 	if err != nil {
 		return err
 	}
-	changes := settings.Changes{InstanceName: req.InstanceName, Timezone: req.Timezone, Units: map[units.Family]units.Unit{}}
-	for family, unit := range req.Units {
-		changes.Units[units.Family(family)] = units.Unit(unit)
+	if me.HasPassword {
+		if err := s.Auth.StartSession(w, r, me.ID, auth.MethodPassword); err != nil {
+			return err
+		}
 	}
-	maps.Copy(fields, changes.Validate())
-	if len(fields) > 0 {
-		return httpx.Validation("invalid setup", fields)
+	httpx.WriteJSON(w, http.StatusCreated, me)
+	return nil
+}
+
+// SetupInput is what first-run setup is given; empty fields take their defaults.
+type SetupInput struct {
+	InstanceName *string
+	Timezone     *string
+	Units        map[string]string
+	Theme        string
+	AuthMode     string
+	Username     string
+	DisplayName  string
+	Password     string
+}
+
+// Setup creates the first admin and the instance settings, refusing every later call with errSetupDone, and returns the new admin.
+func (s *Service) Setup(ctx context.Context, in SetupInput) (Me, error) {
+	// Refuse early so a closed instance never spends time hashing for strangers.
+	if required, err := s.Auth.SetupRequired(ctx); err != nil {
+		return Me{}, err
+	} else if !required {
+		return Me{}, errSetupDone
+	}
+
+	fields := httpx.FieldErrors{Message: "invalid setup"}
+	mode, err := s.validateSetup(&in, &fields)
+	if err != nil {
+		return Me{}, err
+	}
+	changes := settings.Changes{InstanceName: in.InstanceName, Timezone: in.Timezone, Units: settings.UnitsFromStrings(in.Units)}
+	fields.AddFrom(changes.Validate())
+	if err := fields.Err(); err != nil {
+		return Me{}, err
 	}
 	var hash *string
-	if req.Password != "" {
-		h, err := s.Auth.Passwords.Hash(ctx, req.Password)
+	if in.Password != "" {
+		h, err := s.Auth.Passwords.Hash(ctx, in.Password)
 		if err != nil {
-			return err
+			return Me{}, err
 		}
 		hash = &h
 	}
@@ -86,97 +105,56 @@ func (s *Service) setup(w http.ResponseWriter, r *http.Request) error {
 		if done || n > 0 {
 			return errSetupDone
 		}
-		now := s.stamp()
-		in := CreateInput{Username: req.Username, DisplayName: req.DisplayName, Role: httpx.RoleAdmin}
-		if id, err = createAccount(ctx, q, in, hash, now); err != nil {
+		now := db.FormatTime(s.now())
+		admin := CreateInput{Username: in.Username, DisplayName: in.DisplayName, Role: httpx.RoleAdmin}
+		if id, err = createAccount(ctx, q, admin, hash, now); err != nil {
 			return err
 		}
-		err = q.UpsertPreferences(ctx, dbgen.UpsertPreferencesParams{UserID: id, Theme: req.Theme, Locale: "en", UpdatedAt: now})
+		err = q.UpsertPreferences(ctx, dbgen.UpsertPreferencesParams{UserID: id, Theme: in.Theme, Locale: "en", UpdatedAt: now})
 		if err != nil {
 			return fmt.Errorf("store preferences: %w", err)
 		}
-		rejected, err := store.Apply(ctx, changes)
-		if err != nil {
+		if err := store.Update(ctx, changes, mode, "invalid setup"); err != nil {
 			return err
-		}
-		if len(rejected) > 0 {
-			return httpx.Validation("invalid setup", rejected)
-		}
-		if err := store.SwitchAuthMode(ctx, mode); err != nil {
-			return setupModeError(err)
 		}
 		return store.SetSetupCompleted(ctx, true)
 	})
 	if err != nil {
-		return err
+		return Me{}, err
 	}
-
-	if hash != nil {
-		// The admin who just chose a password is signed in, so setup flows straight into the app.
-		if err := s.Auth.StartSession(w, r, id, auth.MethodPassword); err != nil {
-			return err
-		}
-	}
-	me, err := s.Me(ctx, id)
-	if err != nil {
-		return err
-	}
-	httpx.WriteJSON(w, http.StatusCreated, me)
-	return nil
+	return s.Me(ctx, id)
 }
 
-// validateSetup fills in defaults, returns the login mode to store and the problems with the request.
-func (s *Service) validateSetup(req *setupRequest) (mode string, fields map[string]string, err error) {
-	fields = map[string]string{}
-	locked := s.Auth.Config.AuthMode
-	mode = req.AuthMode
-	if mode == "" {
-		mode = cmp.Or(locked, config.AuthModePassword)
-	}
+// validateSetup fills in defaults, returns the login mode to store and reports the problems with the request.
+func (s *Service) validateSetup(in *SetupInput, fields *httpx.FieldErrors) (mode string, err error) {
+	mode = cmp.Or(in.AuthMode, s.Auth.Config.AuthMode, config.AuthModePassword)
 	switch {
 	case mode != config.AuthModePassword && mode != config.AuthModeDisabled:
-		fields["auth_mode"] = "must be password or disabled"
-	case locked != "" && mode != locked:
-		return "", nil, &httpx.APIError{
-			Status:  http.StatusConflict,
-			Code:    "env_locked",
-			Message: "the login mode is set by " + config.EnvAuthMode + " on the server",
-			Fields:  map[string]string{"auth_mode": "set by " + config.EnvAuthMode + " on the server"},
-		}
+		fields.Add("auth_mode", httpx.CodeInvalid)
+	case s.Auth.ModeLocked() && mode != s.Auth.Config.AuthMode:
+		return "", auth.ErrEnvLocked
 	}
 
-	if req.Theme == "" {
-		req.Theme = "system"
+	if in.Theme == "" {
+		in.Theme = "system"
 	}
-	if !slices.Contains(themes, req.Theme) {
-		fields["theme"] = "must be one of " + strings.Join(themes, ", ")
+	if !slices.Contains(themes, in.Theme) {
+		fields.Add("theme", httpx.CodeInvalid)
 	}
 
-	req.Username = strings.TrimSpace(req.Username)
-	if mode == config.AuthModeDisabled && req.Username == "" {
-		req.Username = defaultAdminName
+	in.Username = strings.TrimSpace(in.Username)
+	if mode == config.AuthModeDisabled && in.Username == "" {
+		in.Username = defaultAdminName
 	}
-	probe := CreateInput{Username: req.Username, DisplayName: req.DisplayName, Role: httpx.RoleAdmin}
-	for k, v := range validateNewAccount(&probe) {
-		fields[k] = v
-	}
-	req.DisplayName = probe.DisplayName
+	probe := CreateInput{Username: in.Username, DisplayName: in.DisplayName, Role: httpx.RoleAdmin}
+	validateNewAccount(&probe, fields)
+	in.DisplayName = probe.DisplayName
 
 	switch {
-	case req.Password != "":
-		if err := password.Validate(req.Password); err != nil {
-			fields["password"] = err.Error()
-		}
+	case in.Password != "":
+		auth.CheckPassword(fields, "password", in.Password)
 	case mode == config.AuthModePassword:
-		fields["password"] = "required"
+		fields.Add("password", httpx.CodeRequired)
 	}
-	return mode, fields, nil
-}
-
-// setupModeError turns the settings refusal to switch the mode into a field message.
-func setupModeError(err error) error {
-	if !errors.Is(err, settings.ErrInvalid) {
-		return err
-	}
-	return httpx.Validation("invalid setup", map[string]string{"auth_mode": strings.TrimPrefix(err.Error(), settings.ErrInvalid.Error()+": ")})
+	return mode, nil
 }

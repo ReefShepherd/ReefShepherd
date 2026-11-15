@@ -5,10 +5,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/reefshepherd/reefshepherd/internal/db"
@@ -30,7 +28,7 @@ const (
 	sizeWide   = "wide"
 )
 
-// cardType describes one kind of dashboard card; later milestones add entries here.
+// cardType describes one kind of dashboard card; cardTypes is the only list of them.
 type cardType struct {
 	name string
 	// parameter is true when the card shows one parameter and so needs a parameter_id.
@@ -52,14 +50,6 @@ func lookupType(name string) (cardType, bool) {
 		}
 	}
 	return cardType{}, false
-}
-
-func typeNames() string {
-	names := make([]string, len(cardTypes))
-	for i, t := range cardTypes {
-		names[i] = t.name
-	}
-	return strings.Join(names, ", ")
 }
 
 // Card is one dashboard card as the API shows it.
@@ -86,7 +76,7 @@ type CardInput struct {
 	Options     json.RawMessage `json:"options"`
 }
 
-// Service is the dashboard logic behind the HTTP handlers; its errors are *httpx.APIError when the client caused them.
+// Service is the dashboard logic behind the HTTP handlers; the errors it returns for a client mistake are field errors and tanks.ErrNotFound.
 type Service struct {
 	Deps
 	now func() time.Time
@@ -97,36 +87,60 @@ func NewService(deps Deps) *Service {
 	return &Service{Deps: deps, now: time.Now}
 }
 
-func (s *Service) stamp() string { return s.now().UTC().Format(db.TimeLayout) }
-
 // Get returns the user's cards for a tank, creating the default layout the first time the user has none.
 func (s *Service) Get(ctx context.Context, userID, tankID int64) (Layout, error) {
-	q := db.Q(s.DB.R)
-	if err := tanks.Require(ctx, s.DB.R, tankID); err != nil {
-		return Layout{}, err
-	}
-	n, err := q.CountDashboardCards(ctx, dbgen.CountDashboardCardsParams{UserID: userID, TankID: tankID})
-	if err != nil {
-		return Layout{}, fmt.Errorf("count dashboard cards: %w", err)
-	}
-	if n == 0 {
-		// The count is checked again inside the write so two first requests cannot both seed.
-		err := s.DB.InTx(ctx, func(tx *sql.Tx) error {
-			q := db.Q(tx)
-			n, err := q.CountDashboardCards(ctx, dbgen.CountDashboardCardsParams{UserID: userID, TankID: tankID})
-			if err != nil {
-				return fmt.Errorf("count dashboard cards: %w", err)
-			}
-			if n > 0 {
-				return nil
-			}
-			return s.seedDefault(ctx, q, userID, tankID)
-		})
-		if err != nil {
-			return Layout{}, err
+	var out Layout
+	var seed bool
+	// One read transaction keeps the card rows and the enabled-parameter list from the same snapshot.
+	err := s.inReadTx(ctx, func(tx *sql.Tx) error {
+		if err := tanks.Require(ctx, tx, tankID); err != nil {
+			return err
 		}
+		q := db.Q(tx)
+		n, err := q.CountDashboardCards(ctx, dbgen.CountDashboardCardsParams{UserID: userID, TankID: tankID})
+		if err != nil {
+			return fmt.Errorf("count dashboard cards: %w", err)
+		}
+		if n == 0 {
+			seed = true
+			return nil
+		}
+		out, err = list(ctx, q, userID, tankID)
+		return err
+	})
+	if err != nil || !seed {
+		return out, err
 	}
-	return list(ctx, q, userID, tankID)
+	// The tank and count are checked again inside the write so two first requests cannot both seed.
+	err = s.DB.InTx(ctx, func(tx *sql.Tx) error {
+		if err := tanks.Require(ctx, tx, tankID); err != nil {
+			return err
+		}
+		q := db.Q(tx)
+		n, err := q.CountDashboardCards(ctx, dbgen.CountDashboardCardsParams{UserID: userID, TankID: tankID})
+		if err != nil {
+			return fmt.Errorf("count dashboard cards: %w", err)
+		}
+		if n == 0 {
+			if err := s.seedDefault(ctx, q, userID, tankID); err != nil {
+				return err
+			}
+		}
+		out, err = list(ctx, q, userID, tankID)
+		return err
+	})
+	return out, err
+}
+
+// inReadTx runs fn in a read-only transaction on the reader pool, so every read in fn sees the database as it was when the first one ran.
+func (s *Service) inReadTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
+	tx, err := s.DB.R.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("begin read transaction: %w", err)
+	}
+	// Nothing was written, so ending the transaction is always a rollback.
+	defer func() { _ = tx.Rollback() }()
+	return fn(tx)
 }
 
 // Reset discards the user's cards for a tank and creates the default layout again.
@@ -162,9 +176,9 @@ func (s *Service) Replace(ctx context.Context, userID, tankID int64, cards []Car
 		if err != nil {
 			return fmt.Errorf("list enabled parameters: %w", err)
 		}
-		rows, fields := validate(cards, enabled)
-		if len(fields) > 0 {
-			return httpx.Validation("invalid dashboard", fields)
+		rows, err := validate(cards, enabled)
+		if err != nil {
+			return err
 		}
 		_, hidden, err := loadCards(ctx, q, userID, tankID, enabled)
 		if err != nil {
@@ -173,7 +187,7 @@ func (s *Service) Replace(ctx context.Context, userID, tankID int64, cards []Car
 		if _, err := q.DeleteDashboardCards(ctx, dbgen.DeleteDashboardCardsParams{UserID: userID, TankID: tankID}); err != nil {
 			return fmt.Errorf("clear dashboard cards: %w", err)
 		}
-		now := s.stamp()
+		now := db.FormatTime(s.now())
 		for i, row := range rows {
 			row.UserID, row.TankID, row.Position, row.CreatedAt = userID, tankID, int64(i), now
 			if err := q.InsertDashboardCard(ctx, row); err != nil {
@@ -201,7 +215,7 @@ func (s *Service) seedDefault(ctx context.Context, q *dbgen.Queries, userID, tan
 	if err != nil {
 		return fmt.Errorf("list enabled parameters: %w", err)
 	}
-	now := s.stamp()
+	now := db.FormatTime(s.now())
 	insert := func(position int, kind string, parameterID *int64) error {
 		err := q.InsertDashboardCard(ctx, dbgen.InsertDashboardCardParams{
 			UserID: userID, TankID: tankID, CardType: kind, ParameterID: parameterID,
@@ -261,22 +275,22 @@ func list(ctx context.Context, q *dbgen.Queries, userID, tankID int64) (Layout, 
 }
 
 // validate checks a replacement list against the card types and the tank's enabled parameters, returning the rows to insert or the problems keyed by field.
-func validate(cards []CardInput, enabled []int64) ([]dbgen.InsertDashboardCardParams, map[string]string) {
-	fields := map[string]string{}
-	if len(cards) == 0 {
-		fields["cards"] = "must have at least one card"
-		return nil, fields
-	}
-	if len(cards) > maxCards {
-		fields["cards"] = fmt.Sprintf("must have at most %d cards", maxCards)
-		return nil, fields
+func validate(cards []CardInput, enabled []int64) ([]dbgen.InsertDashboardCardParams, error) {
+	fields := httpx.FieldErrors{Message: "invalid dashboard"}
+	switch {
+	case len(cards) == 0:
+		fields.Add("cards", httpx.CodeRequired)
+		return nil, fields.Err()
+	case len(cards) > maxCards:
+		fields.Add("cards", httpx.CodeTooLong)
+		return nil, fields.Err()
 	}
 	rows := make([]dbgen.InsertDashboardCardParams, len(cards))
 	type key struct {
 		cardType    string
 		parameterID int64
 	}
-	seen := map[key]int{}
+	seen := map[key]bool{}
 	for i, c := range cards {
 		field := func(name string) string { return fmt.Sprintf("cards.%d.%s", i, name) }
 		row := dbgen.InsertDashboardCardParams{CardType: c.CardType, ParameterID: c.ParameterID, Size: c.Size}
@@ -284,24 +298,24 @@ func validate(cards []CardInput, enabled []int64) ([]dbgen.InsertDashboardCardPa
 		kind, known := lookupType(c.CardType)
 		switch {
 		case c.CardType == "":
-			fields[field("card_type")] = "is required"
+			fields.Add(field("card_type"), httpx.CodeRequired)
 		case !known:
-			fields[field("card_type")] = "must be one of " + typeNames()
+			fields.Add(field("card_type"), httpx.CodeInvalid)
 		case kind.parameter && c.ParameterID == nil:
-			fields[field("parameter_id")] = "is required for this card type"
+			fields.Add(field("parameter_id"), httpx.CodeRequired)
 		case kind.parameter && !slices.Contains(enabled, *c.ParameterID):
-			fields[field("parameter_id")] = "must be a parameter enabled on this tank"
+			fields.Add(field("parameter_id"), httpx.CodeInvalid)
 		case !kind.parameter && c.ParameterID != nil:
-			fields[field("parameter_id")] = "must be empty for this card type"
+			fields.Add(field("parameter_id"), httpx.CodeInvalid)
 		default:
 			k := key{c.CardType, 0}
 			if c.ParameterID != nil {
 				k.parameterID = *c.ParameterID
 			}
-			if first, dup := seen[k]; dup {
-				fields[fmt.Sprintf("cards.%d", i)] = fmt.Sprintf("duplicates cards.%d", first)
+			if seen[k] {
+				fields.Add(fmt.Sprintf("cards.%d", i), httpx.CodeInvalid)
 			} else {
-				seen[k] = i
+				seen[k] = true
 			}
 		}
 
@@ -309,37 +323,36 @@ func validate(cards []CardInput, enabled []int64) ([]dbgen.InsertDashboardCardPa
 			row.Size = sizeNormal
 		}
 		if !slices.Contains(sizes, row.Size) {
-			fields[field("size")] = "must be one of " + strings.Join(sizes, ", ")
+			fields.Add(field("size"), httpx.CodeInvalid)
 		}
 
-		opts, err := cleanOptions(c.Options)
-		if err != nil {
-			fields[field("options")] = err.Error()
+		var code httpx.Code
+		if row.OptionsJson, code = cleanOptions(c.Options); code != "" {
+			fields.Add(field("options"), code)
 		}
-		row.OptionsJson = opts
 		rows[i] = row
 	}
-	if len(fields) > 0 {
-		return nil, fields
+	if err := fields.Err(); err != nil {
+		return nil, err
 	}
 	return rows, nil
 }
 
-// cleanOptions accepts a JSON object (or nothing) and returns it compacted, "{}" when empty.
-func cleanOptions(raw json.RawMessage) (string, error) {
+// cleanOptions accepts a JSON object (or nothing) and returns it compacted, "{}" when empty; a rejection comes back as a field error code.
+func cleanOptions(raw json.RawMessage) (string, httpx.Code) {
 	if len(raw) == 0 || string(raw) == "null" {
-		return "{}", nil
+		return "{}", ""
 	}
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
-		return "", errors.New("must be a JSON object")
+		return "", httpx.CodeInvalid
 	}
 	var buf bytes.Buffer
 	if err := json.Compact(&buf, raw); err != nil {
-		return "", errors.New("must be a JSON object")
+		return "", httpx.CodeInvalid
 	}
 	if buf.Len() > maxOptionsBytes {
-		return "", fmt.Errorf("must be at most %d bytes", maxOptionsBytes)
+		return "", httpx.CodeTooLong
 	}
-	return buf.String(), nil
+	return buf.String(), ""
 }

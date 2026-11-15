@@ -2,12 +2,10 @@ package auth_test
 
 import (
 	"crypto/sha256"
-	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
-	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +18,7 @@ import (
 	"github.com/reefshepherd/reefshepherd/internal/db"
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
 	"github.com/reefshepherd/reefshepherd/internal/settings"
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 )
 
 // testParams keeps hashing cheap in tests.
@@ -46,16 +45,9 @@ func newEnv(t *testing.T, cfg config.Config) *env {
 // newEnvParams is newEnv with the password hashing cost chosen by the test.
 func newEnvParams(t *testing.T, cfg config.Config, params password.Params) *env {
 	t.Helper()
-	database, err := db.Open(filepath.Join(t.TempDir(), "reef.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
-	if err := database.Migrate(t.Context(), filepath.Join(t.TempDir(), "backups")); err != nil {
-		t.Fatal(err)
-	}
+	database := testutil.OpenDB(t)
 	e := &env{t: t, db: database, store: settings.NewStore(database), hasher: password.NewHasher(params), now: time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)}
-	e.svc = auth.NewService(auth.Deps{DB: database, Settings: e.store, Passwords: e.hasher, Config: cfg})
+	e.svc = auth.NewService(auth.Deps{DB: database, Settings: e.store, Passwords: e.hasher, Config: cfg, Logger: testutil.Logger(t)})
 	e.svc.SetClock(func() time.Time { return e.now })
 
 	mux := http.NewServeMux()
@@ -75,22 +67,6 @@ func newEnvParams(t *testing.T, cfg config.Config, params password.Params) *env 
 	return e
 }
 
-func (e *env) exec(query string, args ...any) {
-	e.t.Helper()
-	if _, err := e.db.W.ExecContext(e.t.Context(), query, args...); err != nil {
-		e.t.Fatalf("%s: %v", query, err)
-	}
-}
-
-func (e *env) count(query string, args ...any) int {
-	e.t.Helper()
-	var n int
-	if err := e.db.R.QueryRowContext(e.t.Context(), query, args...).Scan(&n); err != nil {
-		e.t.Fatalf("%s: %v", query, err)
-	}
-	return n
-}
-
 // addUser inserts an account; an empty pw leaves the password unset.
 func (e *env) addUser(username, pw, role string) int64 {
 	e.t.Helper()
@@ -102,17 +78,12 @@ func (e *env) addUser(username, pw, role string) int64 {
 		}
 		hash = h
 	}
-	res, err := e.db.W.ExecContext(e.t.Context(), `INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)`, username, hash, role)
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	id, _ := res.LastInsertId()
-	return id
+	return testutil.Insert(e.t, e.db, `INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)`, username, hash, role)
 }
 
 func tokenHashCount(e *env, token string) int {
 	sum := sha256.Sum256([]byte(token))
-	return e.count(`SELECT COUNT(*) FROM sessions WHERE token_hash = ?`, sum[:])
+	return testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM sessions WHERE token_hash = ?`, sum[:])
 }
 
 // resp is a recorded response.
@@ -123,26 +94,20 @@ type resp struct {
 
 func (r *resp) decode(v any) {
 	r.t.Helper()
-	if err := json.Unmarshal(r.Body.Bytes(), v); err != nil {
-		r.t.Fatalf("body %q: %v", r.Body.String(), err)
-	}
-}
-
-// errCode returns the code of the JSON error body, or "" when there is none.
-func (r *resp) errCode() string {
-	var b struct {
-		Error struct {
-			Code string `json:"code"`
-		} `json:"error"`
-	}
-	_ = json.Unmarshal(r.Body.Bytes(), &b)
-	return b.Error.Code
+	testutil.DecodeInto(r.t, r.ResponseRecorder, v)
 }
 
 func (r *resp) expect(status int, code string) {
 	r.t.Helper()
-	if r.Code != status || r.errCode() != code {
-		r.t.Fatalf("status=%d code=%q, want %d %q; body=%s", r.Code, r.errCode(), status, code, r.Body.String())
+	testutil.ExpectError(r.t, r.ResponseRecorder, status, code)
+}
+
+// expectFields expects a 422 validation error with exactly the given field to code pairs.
+func (r *resp) expectFields(want map[string]string) {
+	r.t.Helper()
+	b := testutil.ExpectError(r.t, r.ResponseRecorder, http.StatusUnprocessableEntity, "validation")
+	if !maps.Equal(b.Error.Fields, want) {
+		r.t.Errorf("fields = %v, want %v", b.Error.Fields, want)
 	}
 }
 
@@ -169,30 +134,18 @@ func (e *env) client() *client {
 
 func (c *client) do(method, path string, body any) *resp {
 	c.e.t.Helper()
-	var rd *strings.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			c.e.t.Fatal(err)
-		}
-		rd = strings.NewReader(string(b))
-	} else {
-		rd = strings.NewReader("")
-	}
-	r := httptest.NewRequest(method, path, rd)
-	r.RemoteAddr = c.ip + ":5000"
-	r.Header.Set("User-Agent", "test-browser")
-	if body != nil {
-		r.Header.Set("Content-Type", "application/json")
-	}
-	for k, vs := range c.header {
-		r.Header[k] = vs
-	}
-	if c.cookie != "" {
-		r.AddCookie(&http.Cookie{Name: auth.CookieName, Value: c.cookie})
-	}
-	rec := httptest.NewRecorder()
-	c.e.h.ServeHTTP(rec, r)
+	rec := testutil.DoJSON(c.e.t, c.e.h, method, path, body,
+		func(r *http.Request) { r.RemoteAddr = c.ip + ":5000" },
+		testutil.WithHeader("User-Agent", "test-browser"),
+		func(r *http.Request) {
+			for k, vs := range c.header {
+				r.Header[k] = vs
+			}
+			if c.cookie != "" {
+				r.AddCookie(&http.Cookie{Name: auth.CookieName, Value: c.cookie})
+			}
+		},
+	)
 	out := &resp{ResponseRecorder: rec, t: c.e.t}
 	if sc := out.sessionCookie(); sc != nil {
 		if sc.MaxAge < 0 || sc.Value == "" {

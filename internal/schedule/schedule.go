@@ -8,6 +8,27 @@ import (
 // ErrInvalid is wrapped by every validation failure.
 var ErrInvalid = errors.New("invalid schedule")
 
+// Codes a validation failure reports for the schedule field, matching the API's field error codes.
+const (
+	codeRequired   = "required"
+	codeInvalid    = "invalid"
+	codeOutOfRange = "out_of_range"
+)
+
+// Error is a schedule that breaks a rule, with the field error code that names the rule.
+type Error struct {
+	msg  string
+	code string
+}
+
+func (e *Error) Error() string { return e.msg + ": " + ErrInvalid.Error() }
+
+// Unwrap lets errors.Is match ErrInvalid.
+func (e *Error) Unwrap() error { return ErrInvalid }
+
+// FieldError names the request field and the code for the rule that was broken.
+func (e *Error) FieldError() (field, code string) { return "schedule", e.code }
+
 // Kind selects how a schedule repeats.
 type Kind string
 
@@ -55,29 +76,44 @@ type Schedule struct {
 	DueTime       TimeOfDay
 }
 
-// Columns mirrors the stored schedule columns, with nil for SQL NULL.
+// Columns is a schedule as the API and the stored columns carry it, with nil for SQL NULL and JSON null.
 type Columns struct {
-	Kind          string
-	IntervalDays  *int
-	Weekdays      *int
-	IntervalWeeks int
-	MonthDay      *int
-	AnchorDate    *string
-	DueTime       string
+	Kind          string  `json:"kind"`
+	IntervalDays  *int64  `json:"interval_days"`
+	Weekdays      *int64  `json:"weekdays"`
+	IntervalWeeks int64   `json:"interval_weeks"`
+	MonthDay      *int64  `json:"month_day"`
+	AnchorDate    *string `json:"anchor_date"`
+	DueTime       string  `json:"due_time"`
 }
 
-func intOrZero(p *int) int {
+// Equal reports whether both hold the same values, comparing what the pointers point at.
+func (c Columns) Equal(o Columns) bool {
+	return c.Kind == o.Kind && c.IntervalWeeks == o.IntervalWeeks && c.DueTime == o.DueTime &&
+		sameValue(c.IntervalDays, o.IntervalDays) && sameValue(c.Weekdays, o.Weekdays) &&
+		sameValue(c.MonthDay, o.MonthDay) && sameValue(c.AnchorDate, o.AnchorDate)
+}
+
+func sameValue[T comparable](a, b *T) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func intOrZero(p *int64) int {
 	if p == nil {
 		return 0
 	}
-	return *p
+	return int(*p)
 }
 
-func intPtr(v int) *int {
+func intPtr(v int) *int64 {
 	if v == 0 {
 		return nil
 	}
-	return &v
+	n := int64(v)
+	return &n
 }
 
 // Parse validates stored columns (empty due time means the default, zero interval_weeks means 1) and clears the ones the kind does not use.
@@ -86,7 +122,7 @@ func Parse(c Columns) (Schedule, error) {
 		Kind:          Kind(c.Kind),
 		IntervalDays:  intOrZero(c.IntervalDays),
 		Weekdays:      intOrZero(c.Weekdays),
-		IntervalWeeks: c.IntervalWeeks,
+		IntervalWeeks: int(c.IntervalWeeks),
 		MonthDay:      intOrZero(c.MonthDay),
 		DueTime:       DefaultDueTime(),
 	}
@@ -119,7 +155,7 @@ func (s Schedule) Columns() Columns {
 		Kind:          string(s.Kind),
 		IntervalDays:  intPtr(s.IntervalDays),
 		Weekdays:      intPtr(s.Weekdays),
-		IntervalWeeks: s.IntervalWeeks,
+		IntervalWeeks: int64(s.IntervalWeeks),
 		MonthDay:      intPtr(s.MonthDay),
 		DueTime:       s.DueTime.String(),
 	}
@@ -154,20 +190,20 @@ func (s Schedule) normalized() Schedule {
 	return n
 }
 
-func invalid(format string, args ...any) error {
-	return fmt.Errorf("%s: %w", fmt.Sprintf(format, args...), ErrInvalid)
+func invalid(code, format string, args ...any) error {
+	return &Error{msg: fmt.Sprintf(format, args...), code: code}
 }
 
 // Validate checks that the fields the kind needs are present and every field is in range.
 func (s Schedule) Validate() error {
 	if s.DueTime.Hour < 0 || s.DueTime.Hour > 23 || s.DueTime.Minute < 0 || s.DueTime.Minute > 59 {
-		return invalid("due time %v out of range", s.DueTime)
+		return invalid(codeOutOfRange, "due time %v out of range", s.DueTime)
 	}
 	if !s.AnchorDate.IsZero() && !s.AnchorDate.Valid() {
-		return invalid("anchor date %v is not a calendar date", s.AnchorDate)
+		return invalid(codeInvalid, "anchor date %v is not a calendar date", s.AnchorDate)
 	}
 	if !s.AnchorDate.IsZero() && (s.AnchorDate.Year < minAnchorYear || s.AnchorDate.Year > maxAnchorYear) {
-		return invalid("anchor date %v not in years %d..%d", s.AnchorDate, minAnchorYear, maxAnchorYear)
+		return invalid(codeOutOfRange, "anchor date %v not in years %d..%d", s.AnchorDate, minAnchorYear, maxAnchorYear)
 	}
 	switch s.Kind {
 	case None:
@@ -179,7 +215,7 @@ func (s Schedule) Validate() error {
 			return err
 		}
 		if s.AnchorDate.IsZero() {
-			return invalid("every_n_days needs an anchor date")
+			return invalid(codeRequired, "every_n_days needs an anchor date")
 		}
 		return nil
 	case Weekly:
@@ -190,19 +226,19 @@ func (s Schedule) Validate() error {
 			return err
 		}
 		if s.IntervalWeeks > 1 && s.AnchorDate.IsZero() {
-			return invalid("weekly every %d weeks needs an anchor date", s.IntervalWeeks)
+			return invalid(codeRequired, "weekly every %d weeks needs an anchor date", s.IntervalWeeks)
 		}
 		return nil
 	case Monthly:
 		return checkRange("month_day", s.MonthDay, 1, 31)
 	default:
-		return invalid("unknown kind %q", s.Kind)
+		return invalid(codeInvalid, "unknown kind %q", s.Kind)
 	}
 }
 
 func checkRange(name string, v, lo, hi int) error {
 	if v < lo || v > hi {
-		return invalid("%s %d not in %d..%d", name, v, lo, hi)
+		return invalid(codeOutOfRange, "%s %d not in %d..%d", name, v, lo, hi)
 	}
 	return nil
 }

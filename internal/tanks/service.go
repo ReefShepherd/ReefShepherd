@@ -28,8 +28,8 @@ const (
 // tankTypes are the allowed values of a tank's type.
 var tankTypes = []string{"reef", "fowlr", "frag", "quarantine", "other"}
 
-// ErrNotFound is the error for a tank that does not exist.
-var ErrNotFound = httpx.NotFound("no such tank")
+// ErrNotFound is the error for a tank that does not exist; its text is the message of the 404 the handlers send.
+var ErrNotFound = errors.New("no such tank")
 
 // Tank is a tank as the API shows it, with the volume in the instance's display unit.
 type Tank struct {
@@ -46,7 +46,7 @@ type Tank struct {
 	UpdatedAt  string   `json:"updated_at"`
 }
 
-// Service is the tank logic behind the HTTP handlers; its errors are *httpx.APIError when the client caused them.
+// Service is the tank logic behind the HTTP handlers; the errors it returns for a client mistake are field errors and ErrNotFound.
 type Service struct {
 	Deps
 	now func() time.Time
@@ -56,8 +56,6 @@ type Service struct {
 func NewService(deps Deps) *Service {
 	return &Service{Deps: deps, now: time.Now}
 }
-
-func (s *Service) stamp() string { return s.now().UTC().Format(db.TimeLayout) }
 
 // volumeUnit returns the display unit tank volumes are shown and entered in.
 func (s *Service) volumeUnit(ctx context.Context) (units.Unit, error) {
@@ -87,11 +85,7 @@ func (s *Service) List(ctx context.Context, includeArchived bool) ([]Tank, error
 	if err != nil {
 		return nil, err
 	}
-	flag := int64(0)
-	if includeArchived {
-		flag = 1
-	}
-	rows, err := db.Q(s.DB.R).ListTanks(ctx, flag)
+	rows, err := db.Q(s.DB.R).ListTanks(ctx, db.Flag(includeArchived))
 	if err != nil {
 		return nil, fmt.Errorf("list tanks: %w", err)
 	}
@@ -147,42 +141,30 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Tank, error) {
 	if err != nil {
 		return Tank{}, err
 	}
-	fields := map[string]string{}
-	name, err := cleanName(in.Name)
-	if err != nil {
-		fields["name"] = err.Error()
-	}
+	fields := httpx.FieldErrors{Message: "invalid tank"}
+	name := cleanName(in.Name, &fields)
 	tankType := strings.TrimSpace(in.TankType)
 	if tankType == "" {
 		tankType = defaultType
 	}
 	if !slices.Contains(tankTypes, tankType) {
-		fields["tank_type"] = "must be one of " + strings.Join(tankTypes, ", ")
+		fields.Add("tank_type", httpx.CodeInvalid)
 	}
-	liters, err := cleanVolume(unit, in.Volume)
-	if err != nil {
-		fields["volume"] = err.Error()
-	}
-	startedOn, err := cleanStartedOn(in.StartedOn)
-	if err != nil {
-		fields["started_on"] = err.Error()
-	}
-	note, err := cleanNote(in.Note)
-	if err != nil {
-		fields["note"] = err.Error()
-	}
+	liters := cleanVolume(unit, in.Volume, &fields)
+	startedOn := cleanStartedOn(in.StartedOn, &fields)
+	note := cleanNote(in.Note, &fields)
 
 	var created dbgen.Tank
 	err = s.DB.InTx(ctx, func(tx *sql.Tx) error {
 		q := db.Q(tx)
-		keys, err := s.checkPresets(ctx, q, in.Presets, fields)
+		keys, err := s.checkPresets(ctx, q, in.Presets, &fields)
 		if err != nil {
 			return err
 		}
-		if len(fields) > 0 {
-			return httpx.Validation("invalid tank", fields)
+		if err := fields.Err(); err != nil {
+			return err
 		}
-		now := s.stamp()
+		now := db.FormatTime(s.now())
 		created, err = q.CreateTank(ctx, dbgen.CreateTankParams{
 			Name: name, TankType: tankType, VolumeLiters: liters, StartedOn: startedOn, Note: note, CreatedAt: now, UpdatedAt: now,
 		})
@@ -204,7 +186,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Tank, error) {
 }
 
 // checkPresets reports unknown or retired preset keys in fields and returns the valid keys for the insert, where repeats are harmless.
-func (s *Service) checkPresets(ctx context.Context, q *dbgen.Queries, requested []string, fields map[string]string) ([]*string, error) {
+func (s *Service) checkPresets(ctx context.Context, q *dbgen.Queries, requested []string, fields *httpx.FieldErrors) ([]*string, error) {
 	if len(requested) == 0 {
 		return nil, nil
 	}
@@ -213,16 +195,12 @@ func (s *Service) checkPresets(ctx context.Context, q *dbgen.Queries, requested 
 		return nil, fmt.Errorf("list presets: %w", err)
 	}
 	var keys []*string
-	var unknown []string
 	for _, key := range requested {
 		if slices.Contains(known, key) {
 			keys = append(keys, &key)
 		} else {
-			unknown = append(unknown, key)
+			fields.Add("presets", httpx.CodeInvalid)
 		}
-	}
-	if len(unknown) > 0 {
-		fields["presets"] = "unknown preset: " + strings.Join(unknown, ", ")
 	}
 	return keys, nil
 }
@@ -253,42 +231,34 @@ func (s *Service) Update(ctx context.Context, id int64, in UpdateInput) (Tank, e
 		if err != nil {
 			return fmt.Errorf("read tank: %w", err)
 		}
-		fields := map[string]string{}
+		fields := httpx.FieldErrors{Message: "invalid tank"}
 		p := dbgen.UpdateTankParams{
 			ID: id, Name: cur.Name, TankType: cur.TankType, VolumeLiters: cur.VolumeLiters,
-			StartedOn: cur.StartedOn, Note: cur.Note, SortOrder: cur.SortOrder, UpdatedAt: s.stamp(),
+			StartedOn: cur.StartedOn, Note: cur.Note, SortOrder: cur.SortOrder, UpdatedAt: db.FormatTime(s.now()),
 		}
 		if in.Name != nil {
-			if p.Name, err = cleanName(*in.Name); err != nil {
-				fields["name"] = err.Error()
-			}
+			p.Name = cleanName(*in.Name, &fields)
 		}
 		if in.TankType != nil {
 			p.TankType = strings.TrimSpace(*in.TankType)
 			if !slices.Contains(tankTypes, p.TankType) {
-				fields["tank_type"] = "must be one of " + strings.Join(tankTypes, ", ")
+				fields.Add("tank_type", httpx.CodeInvalid)
 			}
 		}
 		if in.Volume.Set {
-			if p.VolumeLiters, err = cleanVolume(unit, in.Volume.Value); err != nil {
-				fields["volume"] = err.Error()
-			}
+			p.VolumeLiters = cleanVolume(unit, in.Volume.Value, &fields)
 		}
 		if in.StartedOn.Set {
-			if p.StartedOn, err = cleanStartedOn(in.StartedOn.Value); err != nil {
-				fields["started_on"] = err.Error()
-			}
+			p.StartedOn = cleanStartedOn(in.StartedOn.Value, &fields)
 		}
 		if in.Note != nil {
-			if p.Note, err = cleanNote(*in.Note); err != nil {
-				fields["note"] = err.Error()
-			}
+			p.Note = cleanNote(*in.Note, &fields)
 		}
 		if in.SortOrder != nil {
 			p.SortOrder = *in.SortOrder
 		}
-		if len(fields) > 0 {
-			return httpx.Validation("invalid tank", fields)
+		if err := fields.Err(); err != nil {
+			return err
 		}
 		if updated, err = q.UpdateTank(ctx, p); err != nil {
 			return fmt.Errorf("update tank: %w", err)
@@ -316,7 +286,7 @@ func (s *Service) setArchived(ctx context.Context, id int64, archived bool) (Tan
 	if err != nil {
 		return Tank{}, err
 	}
-	now := s.stamp()
+	now := db.FormatTime(s.now())
 	var row dbgen.Tank
 	err = s.DB.InTx(ctx, func(tx *sql.Tx) error {
 		q := db.Q(tx)
@@ -348,7 +318,7 @@ func (s *Service) Delete(ctx context.Context, id int64, confirm string) error {
 			return fmt.Errorf("read tank: %w", err)
 		}
 		if confirm != cur.Name {
-			return httpx.Validation("confirmation does not match", map[string]string{"confirm": "must be the tank's name"})
+			return httpx.Reject("confirmation does not match", "confirm", httpx.CodeIncorrect)
 		}
 		if _, err := q.DeleteTank(ctx, id); err != nil {
 			return fmt.Errorf("delete tank: %w", err)
@@ -357,48 +327,50 @@ func (s *Service) Delete(ctx context.Context, id int64, confirm string) error {
 	})
 }
 
-func cleanName(name string) (string, error) {
+func cleanName(name string, fields *httpx.FieldErrors) string {
 	name = strings.TrimSpace(name)
-	if name == "" {
-		return "", errors.New("is required")
+	switch {
+	case name == "":
+		fields.Add("name", httpx.CodeRequired)
+	case utf8.RuneCountInString(name) > maxNameRunes:
+		fields.Add("name", httpx.CodeTooLong)
 	}
-	if utf8.RuneCountInString(name) > maxNameRunes {
-		return "", fmt.Errorf("must be at most %d characters", maxNameRunes)
-	}
-	return name, nil
+	return name
 }
 
-func cleanNote(note string) (string, error) {
+func cleanNote(note string, fields *httpx.FieldErrors) string {
 	if utf8.RuneCountInString(note) > maxNoteRunes {
-		return "", fmt.Errorf("must be at most %d characters", maxNoteRunes)
+		fields.Add("note", httpx.CodeTooLong)
 	}
-	return note, nil
+	return note
 }
 
 // cleanVolume converts a volume entered in the display unit to canonical liters, nil meaning no volume.
-func cleanVolume(unit units.Unit, v *float64) (*float64, error) {
+func cleanVolume(unit units.Unit, v *float64, fields *httpx.FieldErrors) *float64 {
 	if v == nil {
-		return nil, nil
+		return nil
 	}
 	liters, err := units.ToCanonical(units.Volume, unit, *v)
 	if err != nil || !(liters > 0) || liters > maxVolumeLiters {
-		return nil, errors.New("must be a positive, realistic tank volume")
+		fields.Add("volume", httpx.CodeOutOfRange)
+		return nil
 	}
-	return &liters, nil
+	return &liters
 }
 
 // cleanStartedOn accepts a YYYY-MM-DD calendar date, treating blank as no date.
-func cleanStartedOn(v *string) (*string, error) {
+func cleanStartedOn(v *string, fields *httpx.FieldErrors) *string {
 	if v == nil {
-		return nil, nil
+		return nil
 	}
 	s := strings.TrimSpace(*v)
 	if s == "" {
-		return nil, nil
+		return nil
 	}
 	d, err := schedule.ParseDate(s)
 	if err != nil || d.String() != s {
-		return nil, errors.New("must be a date as YYYY-MM-DD")
+		fields.Add("started_on", httpx.CodeInvalid)
+		return nil
 	}
-	return &s, nil
+	return &s
 }

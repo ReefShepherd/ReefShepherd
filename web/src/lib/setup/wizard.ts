@@ -1,6 +1,7 @@
-import { isApiError } from '#lib/api/client.js';
-import { fieldText } from '#lib/api/field-errors.js';
 import type { SetupRequest } from '#lib/api/users.js';
+import { normalizeTimeZone } from '#lib/format/timezone.js';
+import type { FieldErrors } from '#lib/forms/codes.js';
+import { serverErrors } from '#lib/forms/serverErrors.js';
 import {
   collectErrors,
   validateDisplayName,
@@ -9,8 +10,7 @@ import {
   validateRequired,
   validateTimeZone,
   validateUsername
-} from '#lib/auth/validation.js';
-import { normalizeTimeZone } from '#lib/format/timezone.js';
+} from '#lib/forms/validation.js';
 import type { ThemeName } from '#lib/theme/theme.svelte.js';
 
 export interface SetupDraft {
@@ -57,15 +57,13 @@ export function loginChoice(config: { mode: string; mode_locked: boolean }): {
     : { loginRequired: true, locked: false };
 }
 
-export type SetupErrors = Partial<Record<keyof SetupDraft, string>>;
-
-/** The problems with the fields shown on a step; an empty object means the step may be left. */
-export function validateSetupStep(step: SetupStep, draft: SetupDraft): SetupErrors {
+/** The problems with the fields shown on a step, keyed by the server's field names; an empty object means the step may be left. */
+export function validateSetupStep(step: SetupStep, draft: SetupDraft): FieldErrors {
   switch (step) {
     case 'instance':
       return collectErrors({
-        instanceName: validateRequired(draft.instanceName),
-        timeZone: validateTimeZone(draft.timeZone)
+        instance_name: validateRequired(draft.instanceName),
+        timezone: validateTimeZone(draft.timeZone)
       });
     case 'units':
       return {};
@@ -73,9 +71,9 @@ export function validateSetupStep(step: SetupStep, draft: SetupDraft): SetupErro
       if (!draft.loginRequired) return {};
       return collectErrors({
         username: validateUsername(draft.username),
-        displayName: validateDisplayName(draft.displayName),
+        display_name: validateDisplayName(draft.displayName),
         password: validateNewPassword(draft.password),
-        passwordRepeat: validatePasswordMatch(draft.password, draft.passwordRepeat)
+        password_repeat: validatePasswordMatch(draft.password, draft.passwordRepeat)
       });
   }
 }
@@ -98,34 +96,33 @@ export function buildSetupRequest(draft: SetupDraft): SetupRequest {
   return request;
 }
 
-// Server field names mapped to the draft field and the step that shows it.
-const serverFields: Record<string, [keyof SetupDraft, SetupStep]> = {
-  instance_name: ['instanceName', 'instance'],
-  timezone: ['timeZone', 'instance'],
-  username: ['username', 'access'],
-  display_name: ['displayName', 'access'],
-  password: ['password', 'access'],
-  auth_mode: ['loginRequired', 'access']
+// The step that shows each server field.
+const stepOf: Record<string, SetupStep> = {
+  instance_name: 'instance',
+  timezone: 'instance',
+  username: 'access',
+  display_name: 'access',
+  password: 'access',
+  auth_mode: 'access'
 };
 
 /** Turns the fields a failed setup call flagged into form errors, and names the earliest step that shows one. */
 export function setupServerErrors(err: unknown): {
-  errors: SetupErrors;
+  errors: FieldErrors;
   step: SetupStep | undefined;
 } {
-  const errors: SetupErrors = {};
+  const errors: FieldErrors = {};
   let step: SetupStep | undefined;
   const earlier = (candidate: SetupStep) => {
     if (step === undefined || setupSteps.indexOf(candidate) < setupSteps.indexOf(step))
       step = candidate;
   };
-  for (const [field, [key, stepOf]] of Object.entries(serverFields)) {
-    const text = fieldText(err, field);
-    if (text === undefined) continue;
-    errors[key] = text;
-    earlier(stepOf);
+  for (const [field, code] of Object.entries(serverErrors(err).fields)) {
+    if (field.startsWith('units.')) earlier('units');
+    else if (Object.hasOwn(stepOf, field)) {
+      errors[field] = code;
+      earlier(stepOf[field]);
+    }
   }
-  if (isApiError(err) && Object.keys(err.fields).some((f) => f.startsWith('units.')))
-    earlier('units');
   return { errors, step };
 }

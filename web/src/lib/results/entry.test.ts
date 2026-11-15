@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { ApiError } from '#lib/api/client.js';
 import { buildEntry, rowErrors, type EntryRow } from './entry.js';
 
 const row = (parameterId: number, value = '', note = ''): EntryRow => ({
@@ -45,38 +44,27 @@ describe('buildEntry', () => {
 
   it('flags a value that is not a number and a note without a value, and sends nothing', () => {
     const entry = buildEntry([row(1, '8.2'), row(2, 'abc'), row(3, '', 'forgot the value')], null);
-    expect(entry.problems).toEqual({ 1: 'invalid_number', 2: 'value_required' });
+    expect(entry.problems).toEqual({ 1: { value: 'invalid' }, 2: { value_missing: 'required' } });
     expect(entry.body).toBeNull();
     expect(entry.sent).toEqual([]);
   });
 });
 
 describe('rowErrors', () => {
-  const error = (fields: Record<string, string>) =>
-    new ApiError(422, 'validation', 'invalid', fields);
-
   it('maps results.N.value back to the form row that was sent as Nth', () => {
     // Rows 0 and 3 were filled, so server result 1 is form row 3.
-    const errors = rowErrors(error({ 'results.1.value': 'is outside the possible range' }), [0, 3]);
-    expect(Object.keys(errors)).toEqual(['3']);
-    expect(errors[3].value).toBeTruthy();
-    expect(errors[3].note).toBeUndefined();
+    expect(rowErrors({ 'results.1.value': 'out_of_range' }, [0, 3])).toEqual({
+      3: { value: 'out_of_range' }
+    });
   });
 
   it('maps note errors and a refused parameter to their rows', () => {
-    const errors = rowErrors(
-      error({
-        'results.0.note': 'must be at most 2000 characters',
-        'results.1.parameter_id': 'this parameter is archived'
-      }),
-      [2, 5]
-    );
-    expect(errors[2].note).toBeTruthy();
-    expect(errors[5].value).toBeTruthy();
+    expect(
+      rowErrors({ 'results.0.note': 'too_long', 'results.1.parameter_id': 'invalid' }, [2, 5])
+    ).toEqual({ 2: { note: 'too_long' }, 5: { parameter_id: 'invalid' } });
   });
 
-  it('ignores errors that are not about a row and errors that are not API errors', () => {
-    expect(rowErrors(error({ measured_at: 'bad' }), [0])).toEqual({});
-    expect(rowErrors(new Error('x'), [0])).toEqual({});
+  it('ignores errors that are not about a row', () => {
+    expect(rowErrors({ measured_at: 'invalid', results: 'required' }, [0])).toEqual({});
   });
 });

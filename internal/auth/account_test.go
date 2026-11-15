@@ -7,7 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/reefshepherd/reefshepherd/internal/auth"
 	"github.com/reefshepherd/reefshepherd/internal/config"
+	"github.com/reefshepherd/reefshepherd/internal/httpx"
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 )
 
 const newPassword = "an entirely new passphrase"
@@ -36,13 +39,13 @@ func TestPasswordChangeRevokesOtherSessions(t *testing.T) {
 	if bob.whoami().Code != 200 {
 		t.Error("another user's session was ended")
 	}
-	if e.count(`SELECT COUNT(*) FROM sessions WHERE user_id = ?`, id) != 1 {
+	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM sessions WHERE user_id = ?`, id) != 1 {
 		t.Error("alice should have exactly the session that made the change")
 	}
 
 	e.client().login("alice", goodPassword).expect(http.StatusUnauthorized, "invalid_credentials")
 	e.client().mustLogin("alice", newPassword)
-	if e.count(`SELECT COUNT(*) FROM users WHERE id = ? AND password_changed_at IS NOT NULL`, id) != 1 {
+	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM users WHERE id = ? AND password_changed_at IS NOT NULL`, id) != 1 {
 		t.Error("password_changed_at not set")
 	}
 }
@@ -50,13 +53,13 @@ func TestPasswordChangeRevokesOtherSessions(t *testing.T) {
 func TestPasswordChangeEndsPendingSecondStepSessionsToo(t *testing.T) {
 	e, signedIn, _, _ := signedInWithTOTP(t)
 	loginStep1(t, e)
-	if e.count(`SELECT COUNT(*) FROM sessions WHERE stage = 'mfa_pending'`) != 1 {
+	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM sessions WHERE stage = 'mfa_pending'`) != 1 {
 		t.Fatal("no pending session to end")
 	}
 	if r := changePassword(signedIn, goodPassword, newPassword); r.Code != http.StatusNoContent {
 		t.Fatal(r.Body)
 	}
-	if e.count(`SELECT COUNT(*) FROM sessions WHERE stage = 'mfa_pending'`) != 0 {
+	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM sessions WHERE stage = 'mfa_pending'`) != 0 {
 		t.Error("a pending session outlived a password change")
 	}
 }
@@ -69,19 +72,12 @@ func TestPasswordChangeChecksTheCurrentPasswordWithoutLoggingOut(t *testing.T) {
 
 	r := changePassword(c, "not my password!!", newPassword)
 	// Not a 401: the web client treats 401 as "signed out" and would bounce to the login page.
-	r.expect(http.StatusUnprocessableEntity, "validation")
-	if got := r.Body.String(); !containsField(got, "current_password") {
-		t.Errorf("body = %s", got)
-	}
-	changePassword(c, "", newPassword).expect(http.StatusUnprocessableEntity, "validation")
+	r.expectFields(map[string]string{"current_password": "incorrect"})
+	changePassword(c, "", newPassword).expectFields(map[string]string{"current_password": "incorrect"})
 	if c.whoami().Code != 200 {
 		t.Error("a failed change ended the session")
 	}
 	e.client().mustLogin("alice", goodPassword)
-}
-
-func containsField(body, field string) bool {
-	return strings.Contains(body, `"fields":{"`+field+`"`)
 }
 
 func TestPasswordChangeEnforcesLengthRules(t *testing.T) {
@@ -91,15 +87,12 @@ func TestPasswordChangeEnforcesLengthRules(t *testing.T) {
 	c.mustLogin("alice", goodPassword)
 
 	short := changePassword(c, goodPassword, "sevench")
-	short.expect(http.StatusUnprocessableEntity, "validation")
-	if !containsField(short.Body.String(), "new_password") {
-		t.Errorf("body = %s", short.Body)
-	}
+	short.expectFields(map[string]string{"new_password": "too_short"})
 	long := make([]byte, 257)
 	for i := range long {
 		long[i] = 'x'
 	}
-	changePassword(c, goodPassword, string(long)).expect(http.StatusUnprocessableEntity, "validation")
+	changePassword(c, goodPassword, string(long)).expectFields(map[string]string{"new_password": "too_long"})
 	if r := changePassword(c, goodPassword, "exactly8"); r.Code != http.StatusNoContent {
 		t.Errorf("8 characters: %d %s", r.Code, r.Body)
 	}
@@ -112,7 +105,7 @@ func TestWrongCurrentPasswordIsRateLimited(t *testing.T) {
 	c := e.client()
 	c.mustLogin("alice", goodPassword)
 	for range 5 {
-		changePassword(c, "not my password!!", newPassword).expect(http.StatusUnprocessableEntity, "validation")
+		changePassword(c, "not my password!!", newPassword).expectFields(map[string]string{"current_password": "incorrect"})
 	}
 	r := changePassword(c, goodPassword, newPassword)
 	r.expect(http.StatusTooManyRequests, "too_many_requests")
@@ -135,7 +128,7 @@ func TestAccountWithoutPasswordCanSetOneWithoutCurrent(t *testing.T) {
 		t.Fatalf("set first password: %d %s", r.Code, r.Body)
 	}
 	// Once set it is required.
-	changePassword(c, "", "yet another passphrase").expect(http.StatusUnprocessableEntity, "validation")
+	changePassword(c, "", "yet another passphrase").expectFields(map[string]string{"current_password": "incorrect"})
 }
 
 func TestSessionListShowsOnlyActiveOwnSessions(t *testing.T) {
@@ -157,9 +150,8 @@ func TestSessionListShowsOnlyActiveOwnSessions(t *testing.T) {
 		ExpiresAt  string `json:"expires_at"`
 		Current    bool   `json:"current"`
 	}
-	var list []item
 	r := a1.do(http.MethodGet, "/api/v1/me/sessions", nil)
-	r.decode(&list)
+	list := testutil.DecodeItems[item](t, r.ResponseRecorder)
 	if r.Code != 200 || len(list) != 2 {
 		t.Fatalf("list: %d %s", r.Code, r.Body)
 	}
@@ -187,12 +179,11 @@ func TestExpiredSessionsAreNotListed(t *testing.T) {
 	c := e.client()
 	c.mustLogin("alice", goodPassword)
 	// A second row that has run out while its user is still around.
-	e.exec(`INSERT INTO sessions (token_hash, user_id, stage, auth_method, expires_at) VALUES (x'01', ?, 'active', 'password', ?)`,
+	testutil.Exec(e.t, e.db, `INSERT INTO sessions (token_hash, user_id, stage, auth_method, expires_at) VALUES (x'01', ?, 'active', 'password', ?)`,
 		id, e.now.Add(-time.Minute).Format("2006-01-02T15:04:05Z"))
-	var list []struct {
+	list := testutil.DecodeItems[struct {
 		ID int64 `json:"id"`
-	}
-	c.do(http.MethodGet, "/api/v1/me/sessions", nil).decode(&list)
+	}](t, c.do(http.MethodGet, "/api/v1/me/sessions", nil).ResponseRecorder)
 	if len(list) != 1 {
 		t.Errorf("listed %d sessions, want 1", len(list))
 	}
@@ -201,10 +192,9 @@ func TestExpiredSessionsAreNotListed(t *testing.T) {
 func TestPendingSessionsAreNotListed(t *testing.T) {
 	e, c, _, _ := signedInWithTOTP(t)
 	loginStep1(t, e)
-	var list []struct {
+	list := testutil.DecodeItems[struct {
 		ID int64 `json:"id"`
-	}
-	c.do(http.MethodGet, "/api/v1/me/sessions", nil).decode(&list)
+	}](t, c.do(http.MethodGet, "/api/v1/me/sessions", nil).ResponseRecorder)
 	if len(list) != 1 {
 		t.Errorf("listed %d sessions, want only the active one", len(list))
 	}
@@ -268,5 +258,22 @@ func TestCannotRevokeSomeoneElsesSession(t *testing.T) {
 	}
 	for _, bad := range []string{"abc", "0", "-3", "99999999999999999999"} {
 		alice.do(http.MethodDelete, "/api/v1/me/sessions/"+bad, nil).expect(http.StatusNotFound, "not_found")
+	}
+}
+
+func TestCheckPasswordReportsTheCodeOfTheBrokenRule(t *testing.T) {
+	cases := map[string]string{
+		"":                       "too_short",
+		"sevench":                "too_short",
+		"exactly8":               "",
+		strings.Repeat("x", 257): "too_long",
+		"bad text \xff":          "invalid",
+	}
+	for plain, want := range cases {
+		var f httpx.FieldErrors
+		auth.CheckPassword(&f, "password", plain)
+		if got := httpx.Validation(f).Fields["password"]; got != want {
+			t.Errorf("CheckPassword(%q) = %q, want %q", plain, got, want)
+		}
 	}
 }

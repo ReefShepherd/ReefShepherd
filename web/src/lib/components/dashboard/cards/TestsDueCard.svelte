@@ -7,6 +7,7 @@
 </script>
 
 <script lang="ts">
+  import { tankPath } from '#lib/api/tank-id.js';
   import { formatDateTime, relativeTime } from '#lib/format/datetime.js';
   import { useDashboard } from '../context.js';
   import { classifyDue } from '../status.js';
@@ -39,7 +40,7 @@
         </li>
       {/each}
     </ul>
-    <a class="btn" href="/tanks/{encodeURIComponent(dash.tankId)}/tests">{m.dashboard_log_now()}</a>
+    <a class="btn" href={tankPath(dash.tankId, 'tests')}>{m.dashboard_log_now()}</a>
   {/if}
 </div>
 

@@ -34,10 +34,11 @@ type entry struct {
 	last        time.Time
 }
 
-// cell is one counter of the sketch: the failures hashed into it and the latest lock they set, as unix nanoseconds.
+// cell is one counter of the sketch: the failures hashed into it, the latest lock they set and the time of the latest failure, as unix nanoseconds.
 type cell struct {
 	count       int
 	lockedUntil int64
+	last        int64
 }
 
 // sketch is a count-min sketch of failures: a key's count is the minimum over its cells, which other keys can raise but never lower, so no flood can make it forget.
@@ -76,11 +77,12 @@ func (s *sketch) add(key string, now time.Time) {
 			*c = cell{}
 		}
 		c.count++
+		c.last = t
 		c.lockedUntil = max(c.lockedUntil, now.Add(lockout(c.count)).UnixNano())
 	}
 }
 
-// release takes n of the key's own failures back and lifts the locks they set, which can only remove what this key itself added.
+// release takes n of the key's own failures back and lowers each cell's lock to what the failures left in it would set, so it never lifts a lock that other keys' failures hold.
 func (s *sketch) release(key string, n int, now time.Time) {
 	t := now.UnixNano()
 	for _, i := range s.index(key) {
@@ -90,7 +92,7 @@ func (s *sketch) release(key string, n int, now time.Time) {
 			continue
 		}
 		c.count = max(c.count-n, 0)
-		c.lockedUntil = min(c.lockedUntil, t)
+		c.lockedUntil = min(c.lockedUntil, c.last+int64(lockout(c.count)))
 	}
 }
 
@@ -232,8 +234,8 @@ type limiter struct {
 	lastWarn time.Time
 }
 
-func newLimiter(now func() time.Time) *limiter {
-	return &limiter{now: now, log: slog.Default(), ips: newTable(sketchWidth), names: newTable(sketchWidth)}
+func newLimiter(now func() time.Time, log *slog.Logger) *limiter {
+	return &limiter{now: now, log: log, ips: newTable(sketchWidth), names: newTable(sketchWidth)}
 }
 
 // lockout is how long a key stays locked after its nth failure, doubling from 30 seconds up to 15 minutes.

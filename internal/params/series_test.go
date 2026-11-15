@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/reefshepherd/reefshepherd/internal/httpx"
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 )
 
 func TestSeriesReturnsPointsOldestFirstWithRangeAndUnit(t *testing.T) {
@@ -83,9 +83,9 @@ func TestSeriesReturnsPointsOldestFirstWithRangeAndUnit(t *testing.T) {
 
 	e.fail(http.StatusNotFound, "not_found", http.MethodGet, tpPath(tank, 9999, "/series"), nil)
 	e.fail(http.StatusNotFound, "not_found", http.MethodGet, tpPath(9999, temp, "/series"), nil)
-	e.invalid(http.MethodGet, tpPath(tank, temp, "/series?from=yesterday"), nil, "from")
-	e.invalid(http.MethodGet, tpPath(tank, temp, "/series?from=2026-10-22T00:00:00Z&to=2026-10-21T00:00:00Z"), nil, "from")
-	e.invalid(http.MethodGet, tpPath(tank, temp, "/series?to=soon"), nil, "to")
+	e.invalid(http.MethodGet, tpPath(tank, temp, "/series?from=yesterday"), nil, "from=invalid")
+	e.invalid(http.MethodGet, tpPath(tank, temp, "/series?from=2026-10-22T00:00:00Z&to=2026-10-21T00:00:00Z"), nil, "from=out_of_range")
+	e.invalid(http.MethodGet, tpPath(tank, temp, "/series?to=soon"), nil, "to=invalid")
 }
 
 // keys returns the sorted field names of a decoded JSON object.
@@ -126,8 +126,8 @@ func TestJSONShapes(t *testing.T) {
 	e.addResults(tank, "2026-10-24T09:00:00Z", val(temp, 25.2))
 
 	defs := getJSON(e, "/api/v1/parameters")
-	wantKeys(t, "parameter list", defs, "parameters")
-	wantKeys(t, "parameter", defs["parameters"].([]any)[0], "id", "preset_key", "name", "unit_family", "unit", "unit_label", "decimals",
+	wantKeys(t, "parameter list", defs, "items")
+	wantKeys(t, "parameter", defs["items"].([]any)[0], "id", "preset_key", "name", "unit_family", "unit", "unit_label", "decimals",
 		"default_low", "default_high", "default_test_interval_days", "sort_order", "archived_at")
 
 	tp := getJSON(e, tankPath(tank, "/parameters"))
@@ -139,8 +139,8 @@ func TestJSONShapes(t *testing.T) {
 	wantKeys(t, "latest", param["latest"], "result_id", "value", "measured_at", "in_range")
 
 	page := getJSON(e, tankPath(tank, "/results"))
-	wantKeys(t, "result page", page, "results", "next_cursor")
-	wantKeys(t, "result", page["results"].([]any)[0], "id", "tank_id", "parameter_id", "parameter_name", "measured_at", "value", "unit", "unit_label",
+	wantKeys(t, "result page", page, "items", "next_cursor")
+	wantKeys(t, "result", page["items"].([]any)[0], "id", "tank_id", "parameter_id", "parameter_name", "measured_at", "value", "unit", "unit_label",
 		"in_range", "note", "source", "created_by", "created_at", "updated_at")
 
 	series := getJSON(e, tpPath(tank, temp, "/series"))
@@ -151,7 +151,7 @@ func TestJSONShapes(t *testing.T) {
 	var created map[string]any
 	ph := e.preset("ph")
 	e.must(http.StatusCreated, http.MethodPost, tankPath(tank, "/results"), map[string]any{"results": []entry{val(ph, 8)}}).decode(&created)
-	wantKeys(t, "created results", created, "results")
+	wantKeys(t, "created results", created, "items")
 
 	// An enabled parameter that was never tested has a null latest and still carries its due time.
 	var fresh map[string]any
@@ -165,24 +165,22 @@ func TestRoutesRegistersTheEndpointsOnAMux(t *testing.T) {
 	e := newEnv(t)
 	mux := http.NewServeMux()
 	var hooked []Result
-	Routes(mux, Deps{DB: e.db, Settings: e.store, OnResultCreated: func(_ context.Context, r Result) { hooked = append(hooked, r) }})
-	signedIn := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mux.ServeHTTP(w, r.WithContext(httpx.WithUser(r.Context(), httpx.User{ID: e.userID})))
-	})
+	Routes(mux, Deps{DB: e.db, Settings: e.store, Logger: testutil.Logger(e.t), OnResultCreated: func(_ context.Context, r Result) { hooked = append(hooked, r) }})
+	signedIn := testutil.AsUser(e.userID, "")
 	tank, ph := e.addTank("Routes"), e.preset("ph")
 
-	r := e.doOn(signedIn, http.MethodGet, "/api/v1/parameters", nil)
+	r := e.doOn(mux, http.MethodGet, "/api/v1/parameters", nil, signedIn)
 	if r.Code != http.StatusOK {
 		t.Fatalf("GET parameters: %d %s", r.Code, r.Body)
 	}
-	r = e.doOn(signedIn, http.MethodPost, tankPath(tank, "/results"), map[string]any{"results": []entry{val(ph, 8)}})
+	r = e.doOn(mux, http.MethodPost, tankPath(tank, "/results"), map[string]any{"results": []entry{val(ph, 8)}}, signedIn)
 	if r.Code != http.StatusCreated || len(hooked) != 1 {
 		t.Fatalf("POST results: %d %s, hook calls %d", r.Code, r.Body, len(hooked))
 	}
 	var body struct {
-		Results []ResultView `json:"results"`
+		Items []ResultView `json:"items"`
 	}
-	if err := json.Unmarshal(r.Body.Bytes(), &body); err != nil || len(body.Results) != 1 {
+	if err := json.Unmarshal(r.Body.Bytes(), &body); err != nil || len(body.Items) != 1 {
 		t.Fatalf("body %s: %v", r.Body, err)
 	}
 	rec := httptest.NewRecorder()

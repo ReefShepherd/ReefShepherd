@@ -1,17 +1,18 @@
 <script lang="ts">
   import { authApi } from '#lib/api/auth.js';
-  import { errorText } from '#lib/api/error-text.js';
-  import { fieldText } from '#lib/api/field-errors.js';
+  import Alert from '#lib/components/forms/Alert.svelte';
+  import TextField from '#lib/components/forms/TextField.svelte';
+  import { focusFirstInvalid } from '#lib/dom.js';
+  import { hasErrors, type FieldErrors } from '#lib/forms/codes.js';
+  import { guarded, type GuardHooks } from '#lib/forms/guarded.js';
+  import { fieldTexts } from '#lib/forms/serverErrors.js';
   import {
     collectErrors,
     passwordLimits,
     validateNewPassword,
     validatePasswordMatch,
     validateRequired
-  } from '#lib/auth/validation.js';
-  import Alert from '#lib/components/forms/Alert.svelte';
-  import TextField from '#lib/components/forms/TextField.svelte';
-  import { focusFirstInvalid } from '#lib/dom.js';
+  } from '#lib/forms/validation.js';
   import { m } from '#lib/paraglide/messages.js';
   import { session } from '#lib/session/session.svelte.js';
 
@@ -23,40 +24,39 @@
   let current = $state('');
   let next = $state('');
   let repeat = $state('');
-  let errors = $state<Partial<Record<'current' | 'next' | 'repeat', string>>>({});
+  let errors = $state<FieldErrors>({});
+  const texts = $derived(fieldTexts(errors));
   let failure = $state('');
   let done = $state(false);
   let busy = $state(false);
   let form = $state<HTMLFormElement>();
+
+  const hooks: GuardHooks = {
+    failure: (text) => (failure = text),
+    busy: (b) => (busy = b),
+    fields: (f) => (errors = f),
+    shown: ['current_password', 'new_password'],
+    form: () => form
+  };
 
   async function submit(event: SubmitEvent) {
     event.preventDefault();
     done = false;
     failure = '';
     errors = collectErrors({
-      current: hasPassword ? validateRequired(current) : null,
-      next: validateNewPassword(next),
-      repeat: validatePasswordMatch(next, repeat)
+      current_password: hasPassword ? validateRequired(current) : null,
+      new_password: validateNewPassword(next),
+      password_repeat: validatePasswordMatch(next, repeat)
     });
-    if (Object.keys(errors).length > 0) return focusFirstInvalid(form);
+    if (hasErrors(errors)) return focusFirstInvalid(form);
 
-    busy = true;
-    try {
+    await guarded(async () => {
       await authApi.changePassword(next, hasPassword ? current : undefined);
       current = next = repeat = '';
       done = true;
       await session.load();
       onchanged();
-    } catch (e) {
-      errors = {
-        current: fieldText(e, 'current_password'),
-        next: fieldText(e, 'new_password')
-      };
-      if (!errors.current && !errors.next) failure = errorText(e);
-      await focusFirstInvalid(form);
-    } finally {
-      busy = false;
-    }
+    }, hooks);
   }
 </script>
 
@@ -77,7 +77,7 @@
         label={m.password_current()}
         type="password"
         bind:value={current}
-        error={errors.current}
+        error={texts.current_password}
         autocomplete="current-password"
       />
     {/if}
@@ -86,14 +86,14 @@
       type="password"
       hint={m.password_hint({ min: passwordLimits.min })}
       bind:value={next}
-      error={errors.next}
+      error={texts.new_password}
       autocomplete="new-password"
     />
     <TextField
       label={m.password_confirm()}
       type="password"
       bind:value={repeat}
-      error={errors.repeat}
+      error={texts.password_repeat}
       autocomplete="new-password"
     />
     <div>

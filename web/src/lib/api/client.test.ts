@@ -33,6 +33,21 @@ describe('requests', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/tanks?sort=name&limit=5');
   });
 
+  it('reads a collection from its items envelope', async () => {
+    const { api, fetchMock } = setup(() => json(200, { items: [{ id: 1 }], next_cursor: 'c' }));
+    expect(await api.list('/tanks')).toEqual([{ id: 1 }]);
+    expect(await api.listPage('/tanks/1/results')).toEqual({
+      items: [{ id: 1 }],
+      next_cursor: 'c'
+    });
+    expect(await api.postList('/tanks/1/results', {})).toEqual([{ id: 1 }]);
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual([
+      '/api/v1/tanks',
+      '/api/v1/tanks/1/results',
+      '/api/v1/tanks/1/results'
+    ]);
+  });
+
   it('sends JSON bodies with a JSON content type and the right verb', async () => {
     const { api, fetchMock } = setup(() => json(200, { id: 1 }));
     const created = await api.post<{ id: number }>('/tanks', { name: 'Reef' });

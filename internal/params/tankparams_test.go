@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/reefshepherd/reefshepherd/internal/testutil"
 	"github.com/reefshepherd/reefshepherd/internal/units"
 )
 
@@ -37,10 +38,30 @@ func TestTankParametersListsEveryActiveParameterWithDefaultsUntilConfigured(t *t
 	e.fail(http.StatusNotFound, "not_found", http.MethodGet, "/api/v1/tanks/abc/parameters", nil)
 }
 
+func TestCorruptStoredScheduleIsAServerErrorNotAFieldError(t *testing.T) {
+	e := newEnv(t)
+	tank, ph := e.addTank("Corrupt"), e.preset("ph")
+	testutil.Exec(e.t, e.db, `INSERT INTO tank_parameters (tank_id, parameter_id, enabled, schedule_kind, schedule_since, updated_at) VALUES (?, ?, 1, 'yearly', '2026-10-01T08:00:00Z', '2026-10-01T08:00:00Z')`, tank, ph)
+	e.fail(http.StatusInternalServerError, "internal", http.MethodGet, tankPath(tank, "/parameters"), nil)
+}
+
+func TestCorruptStoredDefaultScheduleIsAServerError(t *testing.T) {
+	e := newEnv(t)
+	tank := e.addTank("Corrupt defaults")
+	testutil.Exec(e.t, e.db, `UPDATE parameter_definitions SET default_test_interval_days = 99999999 WHERE preset_key = 'ph'`)
+	e.fail(http.StatusInternalServerError, "internal", http.MethodGet, tankPath(tank, "/parameters"), nil)
+}
+
+func TestCorruptStoredUnitFamilyIsAServerError(t *testing.T) {
+	e := newEnv(t)
+	testutil.Exec(e.t, e.db, `UPDATE parameter_definitions SET unit_family = 'pressure' WHERE preset_key = 'ph'`)
+	e.fail(http.StatusInternalServerError, "internal", http.MethodGet, "/api/v1/parameters", nil)
+}
+
 func TestTankParametersReadSettingsRowsFromThePresetInsert(t *testing.T) {
 	e := newEnv(t)
 	tank, nitrate := e.addTank("Preset"), e.preset("nitrate")
-	e.exec(`INSERT INTO tank_parameters (tank_id, parameter_id, enabled, ideal_low, ideal_high, schedule_kind, interval_days, sort_order, schedule_since, updated_at)
+	testutil.Exec(e.t, e.db, `INSERT INTO tank_parameters (tank_id, parameter_id, enabled, ideal_low, ideal_high, schedule_kind, interval_days, sort_order, schedule_since, updated_at)
 		SELECT ?, id, 1, default_low, default_high, 'after_last', default_test_interval_days, sort_order, '2026-10-01T08:00:00Z', '2026-10-20T08:00:00Z'
 		FROM parameter_definitions WHERE preset_key = 'nitrate'`, tank)
 
@@ -95,7 +116,7 @@ func TestPutTankParameterEnablesAndMergesFields(t *testing.T) {
 	if o := e.tankParams(other).find(t, temp); o.Configured {
 		t.Errorf("other tank = %+v", o)
 	}
-	if n := e.count(`SELECT COUNT(*) FROM tank_parameters`); n != 1 {
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM tank_parameters`); n != 1 {
 		t.Errorf("%d tank_parameters rows, want 1", n)
 	}
 }
@@ -112,24 +133,24 @@ func TestPutTankParameterValidation(t *testing.T) {
 		body   map[string]any
 		fields []string
 	}{
-		{"low above high", map[string]any{"ideal_low": 27}, []string{"ideal_low"}},
-		{"high below the kept low", map[string]any{"ideal_high": 20}, []string{"ideal_low"}},
-		{"low outside the physical range", map[string]any{"ideal_low": -500}, []string{"ideal_low"}},
-		{"high wrong type", map[string]any{"ideal_high": "hot"}, []string{"ideal_high"}},
-		{"sort order negative", map[string]any{"sort_order": -1}, []string{"sort_order"}},
-		{"sort order huge", map[string]any{"sort_order": 1000000}, []string{"sort_order"}},
-		{"enabled wrong type", map[string]any{"enabled": "yes"}, []string{"enabled"}},
-		{"schedule without kind", sched(map[string]any{"interval_days": 3}), []string{"schedule.kind"}},
-		{"unknown kind", sched(map[string]any{"kind": "sometimes"}), []string{"schedule"}},
-		{"after_last without interval", sched(map[string]any{"kind": "after_last"}), []string{"schedule"}},
-		{"interval zero", sched(map[string]any{"kind": "after_last", "interval_days": 0}), []string{"schedule"}},
-		{"every_n_days without anchor", sched(map[string]any{"kind": "every_n_days", "interval_days": 3}), []string{"schedule"}},
-		{"weekdays out of range", sched(map[string]any{"kind": "weekly", "weekdays": 128}), []string{"schedule"}},
-		{"month day 32", sched(map[string]any{"kind": "monthly", "month_day": 32}), []string{"schedule"}},
-		{"bad due time", sched(map[string]any{"kind": "none", "due_time": "9am"}), []string{"schedule"}},
-		{"bad anchor date", sched(map[string]any{"kind": "every_n_days", "interval_days": 2, "anchor_date": "2026-13-40"}), []string{"schedule"}},
-		{"unknown schedule field", sched(map[string]any{"kind": "none", "bogus": 1}), []string{"bogus"}},
-		{"two problems", map[string]any{"sort_order": -1, "schedule": map[string]any{"kind": "weekly"}}, []string{"sort_order", "schedule"}},
+		{"low above high", map[string]any{"ideal_low": 27}, []string{"ideal_low=out_of_range"}},
+		{"high below the kept low", map[string]any{"ideal_high": 20}, []string{"ideal_low=out_of_range"}},
+		{"low outside the physical range", map[string]any{"ideal_low": -500}, []string{"ideal_low=out_of_range"}},
+		{"high wrong type", map[string]any{"ideal_high": "hot"}, []string{"ideal_high=invalid"}},
+		{"sort order negative", map[string]any{"sort_order": -1}, []string{"sort_order=out_of_range"}},
+		{"sort order huge", map[string]any{"sort_order": 1000000}, []string{"sort_order=out_of_range"}},
+		{"enabled wrong type", map[string]any{"enabled": "yes"}, []string{"enabled=invalid"}},
+		{"schedule without kind", sched(map[string]any{"interval_days": 3}), []string{"schedule.kind=required"}},
+		{"unknown kind", sched(map[string]any{"kind": "sometimes"}), []string{"schedule=invalid"}},
+		{"after_last without interval", sched(map[string]any{"kind": "after_last"}), []string{"schedule=out_of_range"}},
+		{"interval zero", sched(map[string]any{"kind": "after_last", "interval_days": 0}), []string{"schedule=out_of_range"}},
+		{"every_n_days without anchor", sched(map[string]any{"kind": "every_n_days", "interval_days": 3}), []string{"schedule=required"}},
+		{"weekdays out of range", sched(map[string]any{"kind": "weekly", "weekdays": 128}), []string{"schedule=out_of_range"}},
+		{"month day 32", sched(map[string]any{"kind": "monthly", "month_day": 32}), []string{"schedule=out_of_range"}},
+		{"bad due time", sched(map[string]any{"kind": "none", "due_time": "9am"}), []string{"schedule=invalid"}},
+		{"bad anchor date", sched(map[string]any{"kind": "every_n_days", "interval_days": 2, "anchor_date": "2026-13-40"}), []string{"schedule=invalid"}},
+		{"unknown schedule field", sched(map[string]any{"kind": "none", "bogus": 1}), []string{"bogus=invalid"}},
+		{"two problems", map[string]any{"sort_order": -1, "schedule": map[string]any{"kind": "weekly"}}, []string{"sort_order=out_of_range", "schedule=out_of_range"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -165,7 +186,7 @@ func TestStatusUsesTheTanksCurrentRange(t *testing.T) {
 	}
 	var page ResultPage
 	e.must(http.StatusOK, http.MethodGet, tankPath(tank, "/results"), nil).decode(&page)
-	if page.Results[0].InRange {
+	if page.Items[0].InRange {
 		t.Error("the listed result still counts as in range")
 	}
 	var series Series
@@ -192,10 +213,10 @@ func TestLatestPerParameterIsOneStatement(t *testing.T) {
 		e.must(http.StatusOK, http.MethodPut, tpPath(tank, pid, ""), map[string]any{"enabled": true})
 	}
 	insert := func(pid int64, measuredAt string, value float64) int64 {
-		return e.insertID(`INSERT INTO test_results (tank_id, parameter_id, measured_at, value) VALUES (?, ?, ?, ?)`, tank, pid, measuredAt, value)
+		return testutil.Insert(e.t, e.db, `INSERT INTO test_results (tank_id, parameter_id, measured_at, value) VALUES (?, ?, ?, ?)`, tank, pid, measuredAt, value)
 	}
 	otherTank := e.addTank("Newer elsewhere")
-	e.insertID(`INSERT INTO test_results (tank_id, parameter_id, measured_at, value) VALUES (?, ?, '2026-12-01T00:00:00Z', 99)`, otherTank, temp)
+	testutil.Insert(e.t, e.db, `INSERT INTO test_results (tank_id, parameter_id, measured_at, value) VALUES (?, ?, '2026-12-01T00:00:00Z', 99)`, otherTank, temp)
 	insert(temp, "2026-10-20T10:00:00Z", 24)
 	insert(temp, "2026-10-22T10:00:00Z", 25)
 	insert(temp, "2026-10-21T10:00:00Z", 26) // entered last but measured earlier
@@ -203,7 +224,11 @@ func TestLatestPerParameterIsOneStatement(t *testing.T) {
 	tiedLater := insert(ph, "2026-10-23T10:00:00Z", 8.2) // same time: the later row wins
 
 	counter := &countingDB{DBTX: e.svc.r}
-	items, _, err := e.svc.tankParameters(t.Context(), counter, tank, nil)
+	rows, err := tankParameterRows(t.Context(), counter, tank, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, _, err := e.svc.tankParameterItems(t.Context(), rows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +294,7 @@ func TestNeverTestedBaselineMovesOnlyWhenEnabledOrRescheduled(t *testing.T) {
 		t.Helper()
 		got := e.tankParams(tank).find(t, ph)
 		if !is(got.NextDue, wantDue) || got.Overdue != wantOverdue {
-			t.Errorf("%s: next_due = %v overdue = %v, want %s %v", step, got.NextDue, got.Overdue, wantDue, wantOverdue)
+			t.Errorf("%s: next_due = %q overdue = %v, want %s %v", step, deref(got.NextDue), got.Overdue, wantDue, wantOverdue)
 		}
 	}
 	check("after setup", "2026-10-25T09:00:00Z", true)

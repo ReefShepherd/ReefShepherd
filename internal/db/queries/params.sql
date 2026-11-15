@@ -76,7 +76,7 @@ WHERE parameter_definitions.id = ?
     AND parameter_definitions.preset_key IS NULL
     AND parameter_definitions.id NOT IN (SELECT test_results.parameter_id FROM test_results);
 
--- Every definition with the tank's settings (NULL columns when the tank has no row for it) and the newest result, in one statement.
+-- Every definition with the tank's settings and newest result, where a definition the tank has no row for gets NULL settings except a schedule equal to what EnablePresetParameters would store.
 -- name: ListTankParameters :many
 SELECT
     d.id AS parameter_id,
@@ -93,8 +93,8 @@ SELECT
     tp.enabled,
     tp.ideal_low,
     tp.ideal_high,
-    tp.schedule_kind,
-    tp.interval_days,
+    CAST(COALESCE(tp.schedule_kind, CASE WHEN d.default_test_interval_days >= 1 THEN 'after_last' ELSE 'none' END) AS TEXT) AS schedule_kind,
+    COALESCE(tp.interval_days, CASE WHEN tp.tank_id IS NULL AND d.default_test_interval_days >= 1 THEN d.default_test_interval_days END) AS interval_days,
     tp.weekdays,
     tp.interval_weeks,
     tp.month_day,
@@ -126,7 +126,11 @@ INSERT INTO tank_parameters (
     schedule_kind, interval_days, weekdays, interval_weeks, month_day, anchor_date, due_time,
     sort_order, schedule_since, updated_at
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (
+    sqlc.arg(tank_id), sqlc.arg(parameter_id), sqlc.arg(enabled), sqlc.arg(ideal_low), sqlc.arg(ideal_high),
+    sqlc.arg(schedule_kind), sqlc.arg(interval_days), sqlc.arg(weekdays), sqlc.arg(interval_weeks), sqlc.arg(month_day), sqlc.arg(anchor_date), sqlc.arg(due_time),
+    sqlc.arg(sort_order), sqlc.arg(schedule_since), sqlc.arg(updated_at)
+)
 ON CONFLICT (tank_id, parameter_id) DO UPDATE
 SET
     enabled = excluded.enabled,
@@ -146,7 +150,7 @@ SET
 -- name: InsertTestResult :one
 INSERT INTO test_results (tank_id, parameter_id, measured_at, value, note, source, created_by, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-RETURNING id;
+RETURNING id, tank_id, parameter_id, measured_at, value, note, source, created_by, created_at, updated_at;
 
 -- name: GetTestResult :one
 SELECT id, tank_id, parameter_id, measured_at, value, note, source, created_by, created_at, updated_at
@@ -189,3 +193,27 @@ WHERE tank_id = sqlc.arg(tank_id)
     AND (CAST(sqlc.narg(from_at) AS TEXT) IS NULL OR measured_at >= sqlc.narg(from_at))
     AND (CAST(sqlc.narg(to_at) AS TEXT) IS NULL OR measured_at <= sqlc.narg(to_at))
 ORDER BY measured_at, id;
+
+-- name: ListActivePresetKeys :many
+SELECT CAST(preset_key AS TEXT) AS preset_key
+FROM parameter_definitions
+WHERE preset_key IS NOT NULL AND archived_at IS NULL
+ORDER BY sort_order, id;
+
+-- name: EnablePresetParameters :execrows
+INSERT INTO tank_parameters (
+    tank_id, parameter_id, enabled, ideal_low, ideal_high, schedule_kind, interval_days, sort_order, schedule_since, updated_at
+)
+SELECT
+    ?,
+    id,
+    1,
+    default_low,
+    default_high,
+    CASE WHEN default_test_interval_days >= 1 THEN 'after_last' ELSE 'none' END,
+    CASE WHEN default_test_interval_days >= 1 THEN default_test_interval_days END,
+    sort_order,
+    ?,
+    ?
+FROM parameter_definitions
+WHERE archived_at IS NULL AND preset_key IN (sqlc.slice('preset_keys'));
