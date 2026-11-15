@@ -15,7 +15,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/reefshepherd/reefshepherd/internal/auth"
-	"github.com/reefshepherd/reefshepherd/internal/auth/password"
 	"github.com/reefshepherd/reefshepherd/internal/db"
 	"github.com/reefshepherd/reefshepherd/internal/db/dbgen"
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
@@ -36,10 +35,12 @@ var themes = []string{"system", "light", "dark", "oled"}
 const (
 	maxDisplayName = 100
 	maxEmail       = 254
+	minUsername    = 2
+	maxUsername    = 64
 )
 
 var (
-	usernamePattern = regexp.MustCompile(`^[A-Za-z0-9._@-]{2,64}$`)
+	usernamePattern = regexp.MustCompile(fmt.Sprintf(`^[A-Za-z0-9._@-]{%d,%d}$`, minUsername, maxUsername))
 	localePattern   = regexp.MustCompile(`^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$`)
 )
 
@@ -75,7 +76,7 @@ type Me struct {
 	Instance      Instance `json:"instance"`
 }
 
-// Service is the user logic behind the HTTP handlers; its errors are *httpx.APIError when the client caused them.
+// Service is the user logic behind the HTTP handlers; the errors it returns for a client mistake are field errors and the sentinels below.
 type Service struct {
 	Deps
 	now func() time.Time
@@ -97,7 +98,14 @@ func userOfRow(r dbgen.GetUserByIDRow) User {
 	return userFromRow(r.ID, r.Username, r.DisplayName, r.Email, r.Role, r.Disabled, r.HasPassword, r.TotpEnabled, r.CreatedAt)
 }
 
-var errUserNotFound = httpx.NotFound("no such user")
+// Refusals the handlers turn into 404 and 409 responses; the text is the message sent.
+var (
+	errUserNotFound = errors.New("no such user")
+	errLastAdmin    = errors.New("at least one enabled administrator is required")
+	errDisableSelf  = errors.New("you cannot disable your own account")
+	errDeleteSelf   = errors.New("you cannot delete your own account")
+	errSetupDone    = errors.New("setup has already been completed")
+)
 
 func (s *Service) row(ctx context.Context, id int64) (dbgen.GetUserByIDRow, error) {
 	row, err := db.Q(s.DB.R).GetUserByID(ctx, id)
@@ -181,28 +189,24 @@ func (s *Service) UpdateMe(ctx context.Context, id int64, in UpdateMeInput) (Me,
 		if err != nil {
 			return fmt.Errorf("read user: %w", err)
 		}
-		fields := map[string]string{}
+		fields := httpx.FieldErrors{Message: "invalid profile"}
 		displayName, email := cur.DisplayName, cur.Email
 		if in.DisplayName != nil {
-			if displayName, err = cleanDisplayName(*in.DisplayName); err != nil {
-				fields["display_name"] = err.Error()
-			}
+			displayName = cleanDisplayName(*in.DisplayName, &fields)
 		}
 		if in.Email.Set {
-			if email, err = cleanEmail(in.Email.Value); err != nil {
-				fields["email"] = err.Error()
-			}
+			email = cleanEmail(in.Email.Value, &fields)
 		}
 		theme, locale, tank := cur.Theme, cur.Locale, cur.DefaultTankID
 		if in.Theme != nil {
 			if !slices.Contains(themes, *in.Theme) {
-				fields["theme"] = "must be one of " + strings.Join(themes, ", ")
+				fields.Add("theme", httpx.CodeInvalid)
 			}
 			theme = *in.Theme
 		}
 		if in.Locale != nil {
 			if !localePattern.MatchString(*in.Locale) {
-				fields["locale"] = "must be a language code such as en"
+				fields.Add("locale", httpx.CodeInvalid)
 			}
 			locale = *in.Locale
 		}
@@ -212,12 +216,12 @@ func (s *Service) UpdateMe(ctx context.Context, id int64, in UpdateMeInput) (Me,
 				if n, err := q.TankExists(ctx, *tank); err != nil {
 					return fmt.Errorf("check tank: %w", err)
 				} else if n == 0 {
-					fields["default_tank_id"] = "no such tank"
+					fields.Add("default_tank_id", httpx.CodeInvalid)
 				}
 			}
 		}
-		if len(fields) > 0 {
-			return httpx.Validation("invalid profile", fields)
+		if err := fields.Err(); err != nil {
+			return err
 		}
 		now := db.FormatTime(s.now())
 		if err := q.UpdateUserProfile(ctx, dbgen.UpdateUserProfileParams{DisplayName: displayName, Email: email, UpdatedAt: now, ID: id}); err != nil {
@@ -246,12 +250,11 @@ type CreateInput struct {
 
 // Create adds a user with a password.
 func (s *Service) Create(ctx context.Context, in CreateInput) (User, error) {
-	fields := validateNewAccount(&in)
-	if err := password.Validate(in.Password); err != nil {
-		fields["password"] = err.Error()
-	}
-	if len(fields) > 0 {
-		return User{}, httpx.Validation("invalid user", fields)
+	fields := httpx.FieldErrors{Message: "invalid user"}
+	validateNewAccount(&in, &fields)
+	auth.CheckPassword(&fields, "password", in.Password)
+	if err := fields.Err(); err != nil {
+		return User{}, err
 	}
 	hash, err := s.Auth.Passwords.Hash(ctx, in.Password)
 	if err != nil {
@@ -268,24 +271,24 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (User, error) {
 	return s.account(ctx, id)
 }
 
-// validateNewAccount cleans the account fields in place and returns the problems found.
-func validateNewAccount(in *CreateInput) map[string]string {
-	fields := map[string]string{}
+// validateNewAccount cleans the account fields in place and reports the problems found.
+func validateNewAccount(in *CreateInput, fields *httpx.FieldErrors) {
 	in.Username = strings.TrimSpace(in.Username)
 	if !usernamePattern.MatchString(in.Username) {
-		fields["username"] = "must be 2 to 64 letters, digits, dots, dashes, underscores or @"
+		switch n := utf8.RuneCountInString(in.Username); {
+		case n < minUsername:
+			fields.Add("username", httpx.CodeTooShort)
+		case n > maxUsername:
+			fields.Add("username", httpx.CodeTooLong)
+		default:
+			fields.Add("username", httpx.CodeInvalid)
+		}
 	}
-	var err error
-	if in.DisplayName, err = cleanDisplayName(in.DisplayName); err != nil {
-		fields["display_name"] = err.Error()
-	}
-	if in.Email, err = cleanEmail(in.Email); err != nil {
-		fields["email"] = err.Error()
-	}
+	in.DisplayName = cleanDisplayName(in.DisplayName, fields)
+	in.Email = cleanEmail(in.Email, fields)
 	if in.Role != httpx.RoleAdmin && in.Role != httpx.RoleMember {
-		fields["role"] = "must be admin or member"
+		fields.Add("role", httpx.CodeInvalid)
 	}
-	return fields
 }
 
 // createAccount inserts the user row; the caller supplies the transaction so setup can add its own writes.
@@ -295,7 +298,7 @@ func createAccount(ctx context.Context, q *dbgen.Queries, in CreateInput, hash *
 		return 0, fmt.Errorf("check username: %w", err)
 	}
 	if n > 0 {
-		return 0, httpx.Validation("username is taken", map[string]string{"username": "already taken"})
+		return 0, httpx.Reject("username is taken", "username", httpx.CodeTaken)
 	}
 	var changed *string
 	if hash != nil {
@@ -320,14 +323,14 @@ type UpdateInput struct {
 	Password    *string
 }
 
-var errLastAdmin = httpx.Conflict("at least one enabled administrator is required")
-
 // Update changes another user's account; actor is the admin making the change and keepSession is the session id to leave signed in when they change themselves.
 func (s *Service) Update(ctx context.Context, actor httpx.User, keepSession, id int64, in UpdateInput) (User, error) {
 	var hash *string
 	if in.Password != nil {
-		if err := password.Validate(*in.Password); err != nil {
-			return User{}, httpx.Validation("invalid user", map[string]string{"password": err.Error()})
+		fields := httpx.FieldErrors{Message: "invalid user"}
+		auth.CheckPassword(&fields, "password", *in.Password)
+		if err := fields.Err(); err != nil {
+			return User{}, err
 		}
 		h, err := s.Auth.Passwords.Hash(ctx, *in.Password)
 		if err != nil {
@@ -344,32 +347,28 @@ func (s *Service) Update(ctx context.Context, actor httpx.User, keepSession, id 
 		if err != nil {
 			return fmt.Errorf("read user: %w", err)
 		}
-		fields := map[string]string{}
+		fields := httpx.FieldErrors{Message: "invalid user"}
 		displayName, email, role, disabled := cur.DisplayName, cur.Email, cur.Role, cur.Disabled != 0
 		if in.DisplayName != nil {
-			if displayName, err = cleanDisplayName(*in.DisplayName); err != nil {
-				fields["display_name"] = err.Error()
-			}
+			displayName = cleanDisplayName(*in.DisplayName, &fields)
 		}
 		if in.Email.Set {
-			if email, err = cleanEmail(in.Email.Value); err != nil {
-				fields["email"] = err.Error()
-			}
+			email = cleanEmail(in.Email.Value, &fields)
 		}
 		if in.Role != nil {
 			if *in.Role != httpx.RoleAdmin && *in.Role != httpx.RoleMember {
-				fields["role"] = "must be admin or member"
+				fields.Add("role", httpx.CodeInvalid)
 			}
 			role = *in.Role
 		}
 		if in.Disabled != nil {
 			disabled = *in.Disabled
 		}
-		if len(fields) > 0 {
-			return httpx.Validation("invalid user", fields)
+		if err := fields.Err(); err != nil {
+			return err
 		}
 		if disabled && actor.ID == id {
-			return httpx.Conflict("you cannot disable your own account")
+			return errDisableSelf
 		}
 		wasEnabledAdmin := cur.Role == httpx.RoleAdmin && cur.Disabled == 0
 		if wasEnabledAdmin && (role != httpx.RoleAdmin || disabled) {
@@ -412,7 +411,7 @@ func (s *Service) Update(ctx context.Context, actor httpx.User, keepSession, id 
 // Delete removes another user and, through the database, their sessions and two-step login.
 func (s *Service) Delete(ctx context.Context, actor httpx.User, id int64) error {
 	if actor.ID == id {
-		return httpx.Conflict("you cannot delete your own account")
+		return errDeleteSelf
 	}
 	return s.DB.InTx(ctx, func(tx *sql.Tx) error {
 		q := db.Q(tx)
@@ -481,29 +480,31 @@ func requireOtherAdmin(ctx context.Context, q *dbgen.Queries, id int64) error {
 	return nil
 }
 
-func cleanDisplayName(s string) (string, error) {
+// cleanDisplayName trims the name and reports it when it is too long or not valid text.
+func cleanDisplayName(s string, fields *httpx.FieldErrors) string {
 	s = strings.TrimSpace(s)
-	if utf8.RuneCountInString(s) > maxDisplayName {
-		return "", fmt.Errorf("must be at most %d characters", maxDisplayName)
+	switch {
+	case utf8.RuneCountInString(s) > maxDisplayName:
+		fields.Add("display_name", httpx.CodeTooLong)
+	case !utf8.ValidString(s):
+		fields.Add("display_name", httpx.CodeInvalid)
 	}
-	if !utf8.ValidString(s) {
-		return "", errors.New("must be valid text")
-	}
-	return s, nil
+	return s
 }
 
-// cleanEmail returns nil for a blank address.
-func cleanEmail(s *string) (*string, error) {
+// cleanEmail returns nil for a blank address and reports one that is not an email address.
+func cleanEmail(s *string, fields *httpx.FieldErrors) *string {
 	if s == nil {
-		return nil, nil
+		return nil
 	}
 	v := strings.TrimSpace(*s)
 	if v == "" {
-		return nil, nil
+		return nil
 	}
 	addr, err := mail.ParseAddress(v)
 	if err != nil || addr.Address != v || len(v) > maxEmail {
-		return nil, errors.New("must be an email address")
+		fields.Add("email", httpx.CodeInvalid)
+		return nil
 	}
-	return &v, nil
+	return &v
 }

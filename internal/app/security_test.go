@@ -249,9 +249,7 @@ func TestDisablingTOTPThroughTheStackNeedsTheCurrentPassword(t *testing.T) {
 
 	testutil.ExpectError(t, c.do(http.MethodDelete, "/api/v1/me/totp", nil), http.StatusUnprocessableEntity, "validation")
 	b := testutil.ExpectError(t, c.do(http.MethodDelete, "/api/v1/me/totp", map[string]string{"password": "not the password!!"}), http.StatusUnprocessableEntity, "validation")
-	if b.Error.Fields["password"] == "" {
-		t.Errorf("fields = %v", b.Error.Fields)
-	}
+	expectCodes(t, b, map[string]string{"password": "incorrect"})
 	if testutil.Count(t, a.db, `SELECT COUNT(*) FROM user_totp WHERE confirmed_at IS NOT NULL`) != 1 {
 		t.Fatal("two-step login was removed without the password")
 	}

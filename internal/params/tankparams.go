@@ -132,7 +132,8 @@ func settingsOf(row dbgen.ListTankParametersRow) (tankSettings, error) {
 		}
 		sched, err := schedule.Parse(cols)
 		if err != nil {
-			return tankSettings{}, fmt.Errorf("default schedule of parameter %d: %w", row.ParameterID, err)
+			// Not wrapped: a bad stored schedule is a server fault and must not reach the client as a field error.
+			return tankSettings{}, fmt.Errorf("default schedule of parameter %d: %v", row.ParameterID, err) //nolint:errorlint // see above
 		}
 		return tankSettings{low: low, high: high, sched: sched, sortOrder: row.DefaultSortOrder}, nil
 	}
@@ -142,7 +143,7 @@ func settingsOf(row dbgen.ListTankParametersRow) (tankSettings, error) {
 		DueTime: deref(row.DueTime),
 	})
 	if err != nil {
-		return tankSettings{}, fmt.Errorf("schedule of parameter %d: %w", row.ParameterID, err)
+		return tankSettings{}, fmt.Errorf("schedule of parameter %d: %v", row.ParameterID, err) //nolint:errorlint // not wrapped, as above
 	}
 	scheduleSince, err := db.ParseTime(deref(row.ScheduleSince))
 	if err != nil {
@@ -249,11 +250,11 @@ func (s *Service) SetTankParameter(ctx context.Context, tankID, parameterID int6
 			return fmt.Errorf("read tank parameter: %w", err)
 		}
 		if len(rows) == 0 {
-			return notFound("parameter")
+			return errNoParameter
 		}
 		row := rows[0]
 		if row.ArchivedAt != nil {
-			return httpx.Conflict("this parameter is archived")
+			return errParameterArchived
 		}
 		m, err := s.newDisplay(ctx).meta(row.UnitFamily, row.UnitLabel, row.Decimals)
 		if err != nil {
@@ -265,30 +266,32 @@ func (s *Service) SetTankParameter(ctx context.Context, tankID, parameterID int6
 		}
 		before := cur
 
-		fields := fieldErrors{}
+		fields := httpx.FieldErrors{Message: "invalid parameter settings"}
 		if in.Enabled != nil {
 			cur.enabled = *in.Enabled
 		}
-		cur.low = mergeCanonical(m, cur.low, in.IdealLow, "ideal_low", fields)
-		cur.high = mergeCanonical(m, cur.high, in.IdealHigh, "ideal_high", fields)
-		checkRangePair(cur.low, cur.high, "ideal_low", "ideal_high", fields)
+		cur.low = mergeCanonical(m, cur.low, in.IdealLow, "ideal_low", &fields)
+		cur.high = mergeCanonical(m, cur.high, in.IdealHigh, "ideal_high", &fields)
+		checkRangePair(cur.low, cur.high, "ideal_low", "ideal_high", &fields)
 		if in.Schedule != nil {
 			if in.Schedule.Kind == "" {
-				fields.add("schedule.kind", "is required")
+				fields.Add("schedule.kind", httpx.CodeRequired)
 			} else if sched, err := schedule.Parse(in.Schedule.columns()); err != nil {
-				fields.add("schedule", scheduleMessage(err))
+				if !fields.AddFrom(err) {
+					return err
+				}
 			} else {
 				cur.sched = sched
 			}
 		}
 		if in.SortOrder != nil {
 			if *in.SortOrder < 0 || *in.SortOrder > maxSortOrder {
-				fields.add("sort_order", fmt.Sprintf("must be between 0 and %d", maxSortOrder))
+				fields.Add("sort_order", httpx.CodeOutOfRange)
 			} else {
 				cur.sortOrder = int64(*in.SortOrder)
 			}
 		}
-		if err := fields.err("invalid parameter settings"); err != nil {
+		if err := fields.Err(); err != nil {
 			return err
 		}
 

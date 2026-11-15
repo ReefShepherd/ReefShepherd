@@ -2,10 +2,8 @@ package settings
 
 import (
 	"database/sql"
-	"errors"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/reefshepherd/reefshepherd/internal/auth"
 	"github.com/reefshepherd/reefshepherd/internal/config"
@@ -16,6 +14,15 @@ import (
 
 // CodeEnvLocked is the error code for a setting that the server's environment decides.
 const CodeEnvLocked = "env_locked"
+
+// AuthModeLocked is the 409 for changing the login mode while the server's environment decides it.
+func AuthModeLocked() *httpx.APIError {
+	fields := httpx.FieldErrors{}
+	fields.Add("auth_mode", httpx.CodeLocked)
+	e := httpx.Validation(fields)
+	e.Status, e.Code, e.Message = http.StatusConflict, CodeEnvLocked, "the login mode is set by "+config.EnvAuthMode+" on the server"
+	return e
+}
 
 // Deps are the dependencies the package's handlers need.
 type Deps struct {
@@ -121,12 +128,7 @@ func (h *handlers) patchSettings(w http.ResponseWriter, r *http.Request) error {
 		}
 		if *req.AuthMode != effective {
 			if locked := h.Auth.Config.AuthMode; locked != "" {
-				return &httpx.APIError{
-					Status:  http.StatusConflict,
-					Code:    CodeEnvLocked,
-					Message: "the login mode is set by " + config.EnvAuthMode + " on the server",
-					Fields:  map[string]string{"auth_mode": "set by " + config.EnvAuthMode + " on the server"},
-				}
+				return AuthModeLocked()
 			}
 			newMode = *req.AuthMode
 		}
@@ -140,21 +142,16 @@ func (h *handlers) patchSettings(w http.ResponseWriter, r *http.Request) error {
 
 	err := h.DB.InTx(ctx, func(tx *sql.Tx) error {
 		store := h.Settings.WithTx(tx)
-		rejected, err := store.Apply(ctx, changes)
-		if err != nil {
+		rejected := httpx.FieldErrors{Message: "invalid settings"}
+		if err := store.Apply(ctx, changes); err != nil && !rejected.AddFrom(err) {
 			return err
 		}
 		if newMode != "" {
-			if err := store.SwitchAuthMode(ctx, newMode); errors.Is(err, ErrInvalid) {
-				rejected["auth_mode"] = strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": ")
-			} else if err != nil {
+			if err := store.SwitchAuthMode(ctx, newMode); err != nil && !rejected.AddFrom(err) {
 				return err
 			}
 		}
-		if len(rejected) > 0 {
-			return httpx.Validation("invalid settings", rejected)
-		}
-		return nil
+		return rejected.Err()
 	})
 	if err != nil {
 		return err

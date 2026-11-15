@@ -43,6 +43,29 @@ const reminderTimeLayout = "15:04"
 // ErrInvalid is wrapped by every setter that rejects its value.
 var ErrInvalid = errors.New("invalid setting value")
 
+// Codes a rejected value reports, matching the API's field error codes.
+const (
+	codeRequired = "required"
+	codeInvalid  = "invalid"
+)
+
+// invalidError is a rejected setting value, with the API field and the code that says why.
+type invalidError struct {
+	field, code, detail string
+}
+
+func (e *invalidError) Error() string { return ErrInvalid.Error() + ": " + e.detail }
+
+// Unwrap lets errors.Is match ErrInvalid.
+func (e *invalidError) Unwrap() error { return ErrInvalid }
+
+// FieldError names the request field and the code for the rejection.
+func (e *invalidError) FieldError() (field, code string) { return e.field, e.code }
+
+func reject(field, code, format string, args ...any) error {
+	return &invalidError{field: field, code: code, detail: fmt.Sprintf(format, args...)}
+}
+
 // Store reads and writes the instance settings; a key that was never set reads as its default.
 type Store struct {
 	r, w dbgen.DBTX
@@ -85,7 +108,7 @@ func (s *Store) SetInstanceName(ctx context.Context, name string) error {
 func cleanInstanceName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return "", fmt.Errorf("%w: instance name is blank", ErrInvalid)
+		return "", reject("instance_name", codeRequired, "instance name is blank")
 	}
 	return name, nil
 }
@@ -105,7 +128,7 @@ func (s *Store) SetTimezone(ctx context.Context, name string) error {
 
 func checkTimezone(name string) error {
 	if _, err := time.LoadLocation(name); err != nil || name == "" || name == "Local" {
-		return fmt.Errorf("%w: unknown timezone %q", ErrInvalid, name)
+		return reject("timezone", codeInvalid, "unknown timezone %q", name)
 	}
 	return nil
 }
@@ -123,7 +146,7 @@ func (s *Store) GetAuthMode(ctx context.Context) (string, error) {
 // SetAuthMode stores the login mode, config.AuthModePassword or config.AuthModeDisabled.
 func (s *Store) SetAuthMode(ctx context.Context, mode string) error {
 	if !validAuthMode(mode) {
-		return fmt.Errorf("%w: auth mode %q", ErrInvalid, mode)
+		return reject("auth_mode", codeInvalid, "auth mode %q", mode)
 	}
 	return s.set(ctx, keyAuthMode, mode)
 }
@@ -142,7 +165,7 @@ func (s *Store) GetAuthDisabledUserID(ctx context.Context) (int64, error) {
 // SetAuthDisabledUserID stores the user that everyone acts as when login is disabled.
 func (s *Store) SetAuthDisabledUserID(ctx context.Context, id int64) error {
 	if id < 1 {
-		return fmt.Errorf("%w: user id %d", ErrInvalid, id)
+		return reject("auth_disabled_user_id", codeInvalid, "user id %d", id)
 	}
 	return s.set(ctx, keyAuthDisabledUserID, strconv.FormatInt(id, 10))
 }
@@ -189,7 +212,7 @@ func checkUnit(family units.Family, unit units.Unit) (string, error) {
 		return "", err
 	}
 	if _, ok := units.Info(family, unit); !ok {
-		return "", fmt.Errorf("%w: unit %q for %s", ErrInvalid, unit, family)
+		return "", reject("units."+string(family), codeInvalid, "unit %q for %s", unit, family)
 	}
 	return key, nil
 }
@@ -198,7 +221,7 @@ func checkUnit(family units.Family, unit units.Unit) (string, error) {
 func unitKey(family units.Family) (key string, canonical units.Unit, err error) {
 	info, ok := units.Lookup(family)
 	if !ok || family == units.Fixed {
-		return "", "", fmt.Errorf("%w: unit family %q has no display unit", ErrInvalid, family)
+		return "", "", reject("units."+string(family), codeInvalid, "unit family %q has no display unit", family)
 	}
 	return keyUnitPrefix + string(family), info.Canonical, nil
 }
@@ -218,7 +241,7 @@ func (s *Store) SetReminderDefaultTime(ctx context.Context, hhmm string) error {
 
 func checkReminderTime(hhmm string) error {
 	if t, err := time.Parse(reminderTimeLayout, hhmm); err != nil || t.Format(reminderTimeLayout) != hhmm {
-		return fmt.Errorf("%w: reminder time %q is not HH:MM", ErrInvalid, hhmm)
+		return reject("reminder_default_time", codeInvalid, "reminder time %q is not HH:MM", hhmm)
 	}
 	return nil
 }

@@ -83,9 +83,9 @@ func TestSeriesReturnsPointsOldestFirstWithRangeAndUnit(t *testing.T) {
 
 	e.fail(http.StatusNotFound, "not_found", http.MethodGet, tpPath(tank, 9999, "/series"), nil)
 	e.fail(http.StatusNotFound, "not_found", http.MethodGet, tpPath(9999, temp, "/series"), nil)
-	e.invalid(http.MethodGet, tpPath(tank, temp, "/series?from=yesterday"), nil, "from")
-	e.invalid(http.MethodGet, tpPath(tank, temp, "/series?from=2026-10-22T00:00:00Z&to=2026-10-21T00:00:00Z"), nil, "from")
-	e.invalid(http.MethodGet, tpPath(tank, temp, "/series?to=soon"), nil, "to")
+	e.invalid(http.MethodGet, tpPath(tank, temp, "/series?from=yesterday"), nil, "from=invalid")
+	e.invalid(http.MethodGet, tpPath(tank, temp, "/series?from=2026-10-22T00:00:00Z&to=2026-10-21T00:00:00Z"), nil, "from=out_of_range")
+	e.invalid(http.MethodGet, tpPath(tank, temp, "/series?to=soon"), nil, "to=invalid")
 }
 
 // keys returns the sorted field names of a decoded JSON object.

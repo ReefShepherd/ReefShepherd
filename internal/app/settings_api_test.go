@@ -65,19 +65,12 @@ func TestSettingsPatchIsAllOrNothing(t *testing.T) {
 		"instance_name": "Valid Name", "timezone": "Mars/Base", "reminder_default_time": "25:00",
 		"units": map[string]string{"temperature": "kelvin", "nonsense": "x", "volume": "us_gal"},
 	}), http.StatusUnprocessableEntity, "validation")
-	for _, f := range []string{"timezone", "reminder_default_time", "units.temperature", "units.nonsense"} {
-		if b.Error.Fields[f] == "" {
-			t.Errorf("no message for %s: %v", f, b.Error.Fields)
-		}
-	}
-	if b.Error.Fields["instance_name"] != "" || b.Error.Fields["units.volume"] != "" {
-		t.Errorf("valid fields were reported: %v", b.Error.Fields)
-	}
+	expectCodes(t, b, map[string]string{"timezone": "invalid", "reminder_default_time": "invalid", "units.temperature": "invalid", "units.nonsense": "invalid"})
 	s := getSettings(t, c)
 	if s.InstanceName == "Valid Name" || s.Units["volume"] == "us_gal" {
 		t.Errorf("a rejected patch was partly applied: %+v", s)
 	}
-	testutil.ExpectError(t, c.do(http.MethodPatch, "/api/v1/settings", map[string]any{"instance_name": "  "}), http.StatusUnprocessableEntity, "validation")
+	expectCodes(t, testutil.ExpectError(t, c.do(http.MethodPatch, "/api/v1/settings", map[string]any{"instance_name": "  "}), http.StatusUnprocessableEntity, "validation"), map[string]string{"instance_name": "required"})
 	testutil.ExpectError(t, c.do(http.MethodPatch, "/api/v1/settings", map[string]any{"mystery": true}), http.StatusUnprocessableEntity, "validation")
 	_ = a
 }
@@ -112,11 +105,8 @@ func TestTurningLoginOffNeedsTheAdminPassword(t *testing.T) {
 	a, c := adminAndApp(t)
 	off := map[string]any{"auth_mode": "disabled"}
 
-	b := testutil.ExpectError(t, c.do(http.MethodPatch, "/api/v1/settings", off), http.StatusUnprocessableEntity, "validation")
-	if b.Error.Fields["password"] == "" {
-		t.Errorf("fields = %v", b.Error.Fields)
-	}
-	testutil.ExpectError(t, c.doWith(http.MethodPatch, "/api/v1/settings", map[string]any{"auth_mode": "disabled", "password": "the wrong one!!"}, nil), http.StatusUnprocessableEntity, "validation")
+	expectCodes(t, testutil.ExpectError(t, c.do(http.MethodPatch, "/api/v1/settings", off), http.StatusUnprocessableEntity, "validation"), map[string]string{"password": "incorrect"})
+	expectCodes(t, testutil.ExpectError(t, c.doWith(http.MethodPatch, "/api/v1/settings", map[string]any{"auth_mode": "disabled", "password": "the wrong one!!"}, nil), http.StatusUnprocessableEntity, "validation"), map[string]string{"password": "incorrect"})
 	if mode, _ := a.store.GetAuthMode(t.Context()); mode != "password" {
 		t.Fatalf("mode changed to %q without the right password", mode)
 	}
@@ -159,9 +149,7 @@ func TestAdminWithoutAPasswordCannotTurnLoginOffOrOn(t *testing.T) {
 
 	// Login is already off; with nobody holding a password it cannot be switched on.
 	b := testutil.ExpectError(t, c.do(http.MethodPatch, "/api/v1/settings", map[string]any{"auth_mode": "password"}), http.StatusUnprocessableEntity, "validation")
-	if b.Error.Fields["auth_mode"] == "" {
-		t.Errorf("fields = %v", b.Error.Fields)
-	}
+	expectCodes(t, b, map[string]string{"auth_mode": "invalid"})
 	if mode, _ := a.store.GetAuthMode(t.Context()); mode != "disabled" {
 		t.Fatalf("mode = %q", mode)
 	}
@@ -186,9 +174,7 @@ func TestEnvironmentOverrideLocksTheLoginMode(t *testing.T) {
 		t.Errorf("settings = %+v", s)
 	}
 	b := testutil.ExpectError(t, c.do(http.MethodPatch, "/api/v1/settings", map[string]any{"auth_mode": "disabled", "password": adminPassword}), http.StatusConflict, "env_locked")
-	if b.Error.Fields["auth_mode"] == "" {
-		t.Errorf("fields = %v", b.Error.Fields)
-	}
+	expectCodes(t, b, map[string]string{"auth_mode": "locked"})
 	if mode, _ := a.store.GetAuthMode(t.Context()); mode != "password" {
 		t.Error("the locked mode was changed")
 	}

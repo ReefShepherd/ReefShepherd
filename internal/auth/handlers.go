@@ -90,14 +90,14 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if req.Username == "" || req.Password == "" {
-		fields := map[string]string{}
+		fields := httpx.FieldErrors{Message: "username and password are required"}
 		if req.Username == "" {
-			fields["username"] = "required"
+			fields.Add("username", httpx.CodeRequired)
 		}
 		if req.Password == "" {
-			fields["password"] = "required"
+			fields.Add("password", httpx.CodeRequired)
 		}
-		return httpx.Validation("username and password are required", fields)
+		return fields.Err()
 	}
 
 	try, err := s.beginAttempt(r, req.Username)
@@ -171,7 +171,7 @@ func (s *Service) mfa(w http.ResponseWriter, r *http.Request) error {
 		return httpx.Unauthorized("sign in again")
 	}
 	if (req.Code == "") == (req.RecoveryCode == "") {
-		return httpx.Validation("send either code or recovery_code", map[string]string{"code": "send either code or recovery_code"})
+		return httpx.Reject("send either code or recovery_code", "code", httpx.CodeRequired)
 	}
 
 	try, err := s.beginAttempt(r, row.Username)
@@ -285,7 +285,7 @@ func (s *Service) confirmTOTP(w http.ResponseWriter, r *http.Request) error {
 	codes, err := s.ConfirmTOTP(r.Context(), user.ID, req.Code)
 	switch {
 	case errors.Is(err, ErrBadCode):
-		return httpx.Validation("that code is not valid", map[string]string{"code": "that code is not valid"})
+		return httpx.Reject("that code is not valid", "code", httpx.CodeIncorrect)
 	case errors.Is(err, ErrNoEnrollment):
 		return httpx.Conflict("start enrolment first")
 	case errors.Is(err, ErrTOTPEnabled):
@@ -347,7 +347,7 @@ func (s *Service) reauthenticate(ctx context.Context, r *http.Request, userID in
 		field, given = "code", req.Code
 	}
 	if given == "" {
-		return httpx.Validation("confirmation required", map[string]string{field: "required"})
+		return httpx.Reject("confirmation required", field, httpx.CodeRequired)
 	}
 	if u.PasswordHash == nil {
 		return s.ConfirmTOTPCode(ctx, r, userID, given, field)

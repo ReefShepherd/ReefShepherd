@@ -2,6 +2,8 @@
 package httpx
 
 import (
+	"cmp"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"math"
@@ -29,7 +31,7 @@ type APIError struct {
 	Status  int
 	Code    string
 	Message string
-	// Fields maps a request field name to what is wrong with it.
+	// Fields maps a request field name to the code that says what is wrong with it.
 	Fields map[string]string
 	// Header holds extra response headers, such as Retry-After.
 	Header http.Header
@@ -49,9 +51,9 @@ func BadRequest(message string) *APIError {
 	return NewError(http.StatusBadRequest, CodeBadRequest, message)
 }
 
-// Validation is a 422 carrying per-field messages.
-func Validation(message string, fields map[string]string) *APIError {
-	return &APIError{Status: http.StatusUnprocessableEntity, Code: CodeValidation, Message: message, Fields: fields}
+// Validation is a 422 carrying a code per refused field.
+func Validation(f FieldErrors) *APIError {
+	return &APIError{Status: http.StatusUnprocessableEntity, Code: CodeValidation, Message: cmp.Or(f.Message, defaultFieldsMessage), Fields: f.asMap()}
 }
 
 // Unauthorized is a 401 for a missing or invalid session.
@@ -92,10 +94,26 @@ type errorDetail struct {
 	Fields  map[string]string `json:"fields,omitempty"`
 }
 
-// WriteError writes err as the JSON error body, turning any non-*APIError into a generic 500 so internals never leak.
-func WriteError(w http.ResponseWriter, err error) {
+// apiErrorOf returns the response for err: an *APIError it wraps, a validation failure for field errors or a 404 for sql.ErrNoRows, and nil for anything else.
+func apiErrorOf(err error) *APIError {
 	var apiErr *APIError
-	if !errors.As(err, &apiErr) {
+	if errors.As(err, &apiErr) {
+		return apiErr
+	}
+	var fields FieldErrors
+	if fields.AddFrom(err) {
+		return Validation(fields)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return NotFound("not found")
+	}
+	return nil
+}
+
+// WriteError writes err as the JSON error body, turning any error it cannot map into a generic 500 so internals never leak.
+func WriteError(w http.ResponseWriter, err error) {
+	apiErr := apiErrorOf(err)
+	if apiErr == nil {
 		apiErr = NewError(http.StatusInternalServerError, CodeInternal, "internal error")
 	}
 	for name, values := range apiErr.Header {
@@ -108,10 +126,9 @@ func WriteError(w http.ResponseWriter, err error) {
 	}})
 }
 
-// Fail writes err as the JSON error body; an error that is not an *APIError is logged first, since the client only sees "internal error".
+// Fail writes err as the JSON error body; an error with no API form is logged first, since the client only sees "internal error".
 func Fail(logger *slog.Logger, w http.ResponseWriter, r *http.Request, err error) {
-	var apiErr *APIError
-	if !errors.As(err, &apiErr) {
+	if apiErrorOf(err) == nil {
 		logger.LogAttrs(r.Context(), slog.LevelError, "request failed",
 			slog.String("method", r.Method),
 			slog.String("path", r.URL.Path),

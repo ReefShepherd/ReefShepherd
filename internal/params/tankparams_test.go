@@ -38,6 +38,26 @@ func TestTankParametersListsEveryActiveParameterWithDefaultsUntilConfigured(t *t
 	e.fail(http.StatusNotFound, "not_found", http.MethodGet, "/api/v1/tanks/abc/parameters", nil)
 }
 
+func TestCorruptStoredScheduleIsAServerErrorNotAFieldError(t *testing.T) {
+	e := newEnv(t)
+	tank, ph := e.addTank("Corrupt"), e.preset("ph")
+	testutil.Exec(e.t, e.db, `INSERT INTO tank_parameters (tank_id, parameter_id, enabled, schedule_kind, schedule_since, updated_at) VALUES (?, ?, 1, 'yearly', '2026-10-01T08:00:00Z', '2026-10-01T08:00:00Z')`, tank, ph)
+	e.fail(http.StatusInternalServerError, "internal", http.MethodGet, tankPath(tank, "/parameters"), nil)
+}
+
+func TestCorruptStoredDefaultScheduleIsAServerError(t *testing.T) {
+	e := newEnv(t)
+	tank := e.addTank("Corrupt defaults")
+	testutil.Exec(e.t, e.db, `UPDATE parameter_definitions SET default_test_interval_days = 99999999 WHERE preset_key = 'ph'`)
+	e.fail(http.StatusInternalServerError, "internal", http.MethodGet, tankPath(tank, "/parameters"), nil)
+}
+
+func TestCorruptStoredUnitFamilyIsAServerError(t *testing.T) {
+	e := newEnv(t)
+	testutil.Exec(e.t, e.db, `UPDATE parameter_definitions SET unit_family = 'pressure' WHERE preset_key = 'ph'`)
+	e.fail(http.StatusInternalServerError, "internal", http.MethodGet, "/api/v1/parameters", nil)
+}
+
 func TestTankParametersReadSettingsRowsFromThePresetInsert(t *testing.T) {
 	e := newEnv(t)
 	tank, nitrate := e.addTank("Preset"), e.preset("nitrate")
@@ -113,24 +133,24 @@ func TestPutTankParameterValidation(t *testing.T) {
 		body   map[string]any
 		fields []string
 	}{
-		{"low above high", map[string]any{"ideal_low": 27}, []string{"ideal_low"}},
-		{"high below the kept low", map[string]any{"ideal_high": 20}, []string{"ideal_low"}},
-		{"low outside the physical range", map[string]any{"ideal_low": -500}, []string{"ideal_low"}},
-		{"high wrong type", map[string]any{"ideal_high": "hot"}, []string{"ideal_high"}},
-		{"sort order negative", map[string]any{"sort_order": -1}, []string{"sort_order"}},
-		{"sort order huge", map[string]any{"sort_order": 1000000}, []string{"sort_order"}},
-		{"enabled wrong type", map[string]any{"enabled": "yes"}, []string{"enabled"}},
-		{"schedule without kind", sched(map[string]any{"interval_days": 3}), []string{"schedule.kind"}},
-		{"unknown kind", sched(map[string]any{"kind": "sometimes"}), []string{"schedule"}},
-		{"after_last without interval", sched(map[string]any{"kind": "after_last"}), []string{"schedule"}},
-		{"interval zero", sched(map[string]any{"kind": "after_last", "interval_days": 0}), []string{"schedule"}},
-		{"every_n_days without anchor", sched(map[string]any{"kind": "every_n_days", "interval_days": 3}), []string{"schedule"}},
-		{"weekdays out of range", sched(map[string]any{"kind": "weekly", "weekdays": 128}), []string{"schedule"}},
-		{"month day 32", sched(map[string]any{"kind": "monthly", "month_day": 32}), []string{"schedule"}},
-		{"bad due time", sched(map[string]any{"kind": "none", "due_time": "9am"}), []string{"schedule"}},
-		{"bad anchor date", sched(map[string]any{"kind": "every_n_days", "interval_days": 2, "anchor_date": "2026-13-40"}), []string{"schedule"}},
-		{"unknown schedule field", sched(map[string]any{"kind": "none", "bogus": 1}), []string{"bogus"}},
-		{"two problems", map[string]any{"sort_order": -1, "schedule": map[string]any{"kind": "weekly"}}, []string{"sort_order", "schedule"}},
+		{"low above high", map[string]any{"ideal_low": 27}, []string{"ideal_low=out_of_range"}},
+		{"high below the kept low", map[string]any{"ideal_high": 20}, []string{"ideal_low=out_of_range"}},
+		{"low outside the physical range", map[string]any{"ideal_low": -500}, []string{"ideal_low=out_of_range"}},
+		{"high wrong type", map[string]any{"ideal_high": "hot"}, []string{"ideal_high=invalid"}},
+		{"sort order negative", map[string]any{"sort_order": -1}, []string{"sort_order=out_of_range"}},
+		{"sort order huge", map[string]any{"sort_order": 1000000}, []string{"sort_order=out_of_range"}},
+		{"enabled wrong type", map[string]any{"enabled": "yes"}, []string{"enabled=invalid"}},
+		{"schedule without kind", sched(map[string]any{"interval_days": 3}), []string{"schedule.kind=required"}},
+		{"unknown kind", sched(map[string]any{"kind": "sometimes"}), []string{"schedule=invalid"}},
+		{"after_last without interval", sched(map[string]any{"kind": "after_last"}), []string{"schedule=out_of_range"}},
+		{"interval zero", sched(map[string]any{"kind": "after_last", "interval_days": 0}), []string{"schedule=out_of_range"}},
+		{"every_n_days without anchor", sched(map[string]any{"kind": "every_n_days", "interval_days": 3}), []string{"schedule=required"}},
+		{"weekdays out of range", sched(map[string]any{"kind": "weekly", "weekdays": 128}), []string{"schedule=out_of_range"}},
+		{"month day 32", sched(map[string]any{"kind": "monthly", "month_day": 32}), []string{"schedule=out_of_range"}},
+		{"bad due time", sched(map[string]any{"kind": "none", "due_time": "9am"}), []string{"schedule=invalid"}},
+		{"bad anchor date", sched(map[string]any{"kind": "every_n_days", "interval_days": 2, "anchor_date": "2026-13-40"}), []string{"schedule=invalid"}},
+		{"unknown schedule field", sched(map[string]any{"kind": "none", "bogus": 1}), []string{"bogus=invalid"}},
+		{"two problems", map[string]any{"sort_order": -1, "schedule": map[string]any{"kind": "weekly"}}, []string{"sort_order=out_of_range", "schedule=out_of_range"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

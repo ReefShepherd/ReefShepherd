@@ -8,6 +8,27 @@ import (
 // ErrInvalid is wrapped by every validation failure.
 var ErrInvalid = errors.New("invalid schedule")
 
+// Codes a validation failure reports for the schedule field, matching the API's field error codes.
+const (
+	codeRequired   = "required"
+	codeInvalid    = "invalid"
+	codeOutOfRange = "out_of_range"
+)
+
+// Error is a schedule that breaks a rule, with the field error code that names the rule.
+type Error struct {
+	msg  string
+	code string
+}
+
+func (e *Error) Error() string { return e.msg + ": " + ErrInvalid.Error() }
+
+// Unwrap lets errors.Is match ErrInvalid.
+func (e *Error) Unwrap() error { return ErrInvalid }
+
+// FieldError names the request field and the code for the rule that was broken.
+func (e *Error) FieldError() (field, code string) { return "schedule", e.code }
+
 // Kind selects how a schedule repeats.
 type Kind string
 
@@ -154,20 +175,20 @@ func (s Schedule) normalized() Schedule {
 	return n
 }
 
-func invalid(format string, args ...any) error {
-	return fmt.Errorf("%s: %w", fmt.Sprintf(format, args...), ErrInvalid)
+func invalid(code, format string, args ...any) error {
+	return &Error{msg: fmt.Sprintf(format, args...), code: code}
 }
 
 // Validate checks that the fields the kind needs are present and every field is in range.
 func (s Schedule) Validate() error {
 	if s.DueTime.Hour < 0 || s.DueTime.Hour > 23 || s.DueTime.Minute < 0 || s.DueTime.Minute > 59 {
-		return invalid("due time %v out of range", s.DueTime)
+		return invalid(codeOutOfRange, "due time %v out of range", s.DueTime)
 	}
 	if !s.AnchorDate.IsZero() && !s.AnchorDate.Valid() {
-		return invalid("anchor date %v is not a calendar date", s.AnchorDate)
+		return invalid(codeInvalid, "anchor date %v is not a calendar date", s.AnchorDate)
 	}
 	if !s.AnchorDate.IsZero() && (s.AnchorDate.Year < minAnchorYear || s.AnchorDate.Year > maxAnchorYear) {
-		return invalid("anchor date %v not in years %d..%d", s.AnchorDate, minAnchorYear, maxAnchorYear)
+		return invalid(codeOutOfRange, "anchor date %v not in years %d..%d", s.AnchorDate, minAnchorYear, maxAnchorYear)
 	}
 	switch s.Kind {
 	case None:
@@ -179,7 +200,7 @@ func (s Schedule) Validate() error {
 			return err
 		}
 		if s.AnchorDate.IsZero() {
-			return invalid("every_n_days needs an anchor date")
+			return invalid(codeRequired, "every_n_days needs an anchor date")
 		}
 		return nil
 	case Weekly:
@@ -190,19 +211,19 @@ func (s Schedule) Validate() error {
 			return err
 		}
 		if s.IntervalWeeks > 1 && s.AnchorDate.IsZero() {
-			return invalid("weekly every %d weeks needs an anchor date", s.IntervalWeeks)
+			return invalid(codeRequired, "weekly every %d weeks needs an anchor date", s.IntervalWeeks)
 		}
 		return nil
 	case Monthly:
 		return checkRange("month_day", s.MonthDay, 1, 31)
 	default:
-		return invalid("unknown kind %q", s.Kind)
+		return invalid(codeInvalid, "unknown kind %q", s.Kind)
 	}
 }
 
 func checkRange(name string, v, lo, hi int) error {
 	if v < lo || v > hi {
-		return invalid("%s %d not in %d..%d", name, v, lo, hi)
+		return invalid(codeOutOfRange, "%s %d not in %d..%d", name, v, lo, hi)
 	}
 	return nil
 }

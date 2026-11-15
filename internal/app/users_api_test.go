@@ -110,11 +110,7 @@ func TestPatchMeValidates(t *testing.T) {
 	b := testutil.ExpectError(t, c.do(http.MethodPatch, "/api/v1/me", map[string]any{
 		"display_name": string(make([]rune, 101)), "email": "not-an-email", "theme": "neon", "locale": "English", "default_tank_id": 999,
 	}), http.StatusUnprocessableEntity, "validation")
-	for _, f := range []string{"display_name", "email", "theme", "locale", "default_tank_id"} {
-		if b.Error.Fields[f] == "" {
-			t.Errorf("no message for %s: %v", f, b.Error.Fields)
-		}
-	}
+	expectCodes(t, b, map[string]string{"display_name": "too_long", "email": "invalid", "theme": "invalid", "locale": "invalid", "default_tank_id": "invalid"})
 	testutil.ExpectError(t, c.do(http.MethodPatch, "/api/v1/me", map[string]any{"role": "admin"}), http.StatusUnprocessableEntity, "validation")
 	testutil.ExpectError(t, c.do(http.MethodPatch, "/api/v1/me", map[string]any{"username": "other"}), http.StatusUnprocessableEntity, "validation")
 	testutil.ExpectError(t, c.do(http.MethodPatch, "/api/v1/me", map[string]any{"default_tank_id": "seven"}), http.StatusUnprocessableEntity, "validation")
@@ -182,16 +178,11 @@ func TestCreateUserValidation(t *testing.T) {
 	addUser(t, admin, "mia", "member")
 
 	b := testutil.ExpectError(t, admin.do(http.MethodPost, "/api/v1/users", map[string]any{"username": "MIA", "password": otherPassword}), http.StatusUnprocessableEntity, "validation")
-	if b.Error.Fields["username"] == "" {
-		t.Errorf("duplicate username (different case) accepted: %v", b.Error.Fields)
-	}
+	expectCodes(t, b, map[string]string{"username": "taken"})
 	b = testutil.ExpectError(t, admin.do(http.MethodPost, "/api/v1/users", map[string]any{"username": "a b", "password": "short", "role": "root", "email": "x"}), http.StatusUnprocessableEntity, "validation")
-	for _, f := range []string{"username", "password", "role", "email"} {
-		if b.Error.Fields[f] == "" {
-			t.Errorf("no message for %s", f)
-		}
-	}
-	testutil.ExpectError(t, admin.do(http.MethodPost, "/api/v1/users", map[string]any{"username": "nopass"}), http.StatusUnprocessableEntity, "validation")
+	expectCodes(t, b, map[string]string{"username": "invalid", "password": "too_short", "role": "invalid", "email": "invalid"})
+	b = testutil.ExpectError(t, admin.do(http.MethodPost, "/api/v1/users", map[string]any{"username": "nopass"}), http.StatusUnprocessableEntity, "validation")
+	expectCodes(t, b, map[string]string{"password": "too_short"})
 	if testutil.Count(t, a.db, `SELECT COUNT(*) FROM users`) != 2 {
 		t.Error("an invalid request created a user")
 	}
@@ -213,10 +204,9 @@ func TestUpdateUser(t *testing.T) {
 	}
 
 	b := testutil.ExpectError(t, admin.do(http.MethodPatch, userPath(id, ""), map[string]any{"role": "root", "email": "bad", "password": "short"}), http.StatusUnprocessableEntity, "validation")
-	if b.Error.Fields["password"] == "" {
-		t.Errorf("fields = %v", b.Error.Fields)
-	}
-	testutil.ExpectError(t, admin.do(http.MethodPatch, userPath(id, ""), map[string]any{"role": "root"}), http.StatusUnprocessableEntity, "validation")
+	expectCodes(t, b, map[string]string{"password": "too_short"})
+	b = testutil.ExpectError(t, admin.do(http.MethodPatch, userPath(id, ""), map[string]any{"role": "root", "email": "bad"}), http.StatusUnprocessableEntity, "validation")
+	expectCodes(t, b, map[string]string{"role": "invalid", "email": "invalid"})
 	testutil.ExpectError(t, admin.do(http.MethodPatch, "/api/v1/users/9999", map[string]any{"role": "member"}), http.StatusNotFound, "not_found")
 	testutil.ExpectError(t, admin.do(http.MethodPatch, "/api/v1/users/abc", map[string]any{"role": "member"}), http.StatusNotFound, "not_found")
 	testutil.ExpectError(t, admin.do(http.MethodPatch, userPath(id, ""), map[string]any{"username": "renamed"}), http.StatusUnprocessableEntity, "validation")

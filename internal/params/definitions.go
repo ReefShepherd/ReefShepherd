@@ -65,7 +65,7 @@ func (s *Service) ListDefinitions(ctx context.Context, includeArchived bool) ([]
 func (s *Service) definition(ctx context.Context, q dbgen.DBTX, id int64) (Definition, error) {
 	row, err := db.Q(q).GetParameterDefinition(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Definition{}, notFound("parameter")
+		return Definition{}, errNoParameter
 	}
 	if err != nil {
 		return Definition{}, fmt.Errorf("read parameter definition: %w", err)
@@ -85,16 +85,16 @@ type CreateDefinitionInput struct {
 
 // CreateDefinition adds a custom parameter.
 func (s *Service) CreateDefinition(ctx context.Context, in CreateDefinitionInput) (Definition, error) {
-	fields := fieldErrors{}
-	name := cleanName(in.Name, fields)
-	label := cleanUnitLabel(in.UnitLabel, fields)
+	fields := httpx.FieldErrors{Message: "invalid parameter"}
+	name := cleanName(in.Name, &fields)
+	label := cleanUnitLabel(in.UnitLabel, &fields)
 	decimals := int64(defaultDecimals)
 	if in.Decimals != nil {
-		decimals = cleanDecimals(*in.Decimals, fields)
+		decimals = cleanDecimals(*in.Decimals, &fields)
 	}
-	checkRangePair(in.DefaultLow, in.DefaultHigh, "default_low", "default_high", fields)
-	interval := cleanInterval(in.DefaultTestIntervalDays, fields)
-	if err := fields.err("invalid parameter"); err != nil {
+	checkRangePair(in.DefaultLow, in.DefaultHigh, "default_low", "default_high", &fields)
+	interval := cleanInterval(in.DefaultTestIntervalDays, &fields)
+	if err := fields.Err(); err != nil {
 		return Definition{}, err
 	}
 
@@ -138,7 +138,7 @@ func (s *Service) UpdateDefinition(ctx context.Context, id int64, in UpdateDefin
 		q := db.Q(tx)
 		cur, err := q.GetParameterDefinition(ctx, id)
 		if errors.Is(err, sql.ErrNoRows) {
-			return notFound("parameter")
+			return errNoParameter
 		}
 		if err != nil {
 			return fmt.Errorf("read parameter definition: %w", err)
@@ -148,34 +148,34 @@ func (s *Service) UpdateDefinition(ctx context.Context, id int64, in UpdateDefin
 			return err
 		}
 
-		fields := fieldErrors{}
+		fields := httpx.FieldErrors{Message: "invalid parameter"}
 		name, label, decimals := cur.Name, cur.UnitLabel, cur.Decimals
 		if in.Name != nil {
-			name = cleanName(*in.Name, fields)
+			name = cleanName(*in.Name, &fields)
 		}
 		if units.Family(cur.UnitFamily) == units.Fixed {
 			if in.UnitLabel != nil {
-				label = cleanUnitLabel(*in.UnitLabel, fields)
+				label = cleanUnitLabel(*in.UnitLabel, &fields)
 			}
 			if in.Decimals != nil {
-				decimals = cleanDecimals(*in.Decimals, fields)
+				decimals = cleanDecimals(*in.Decimals, &fields)
 			}
 		} else {
 			if in.UnitLabel != nil {
-				fields.add("unit_label", "cannot be changed for a parameter with a unit choice")
+				fields.Add("unit_label", httpx.CodeInvalid)
 			}
 			if in.Decimals != nil {
-				fields.add("decimals", "cannot be changed for a parameter with a unit choice")
+				fields.Add("decimals", httpx.CodeInvalid)
 			}
 		}
-		low := mergeCanonical(m, cur.DefaultLow, in.DefaultLow, "default_low", fields)
-		high := mergeCanonical(m, cur.DefaultHigh, in.DefaultHigh, "default_high", fields)
-		checkRangePair(low, high, "default_low", "default_high", fields)
+		low := mergeCanonical(m, cur.DefaultLow, in.DefaultLow, "default_low", &fields)
+		high := mergeCanonical(m, cur.DefaultHigh, in.DefaultHigh, "default_high", &fields)
+		checkRangePair(low, high, "default_low", "default_high", &fields)
 		interval := cur.DefaultTestIntervalDays
 		if in.DefaultTestIntervalDays.Set {
-			interval = cleanInterval(in.DefaultTestIntervalDays.Value, fields)
+			interval = cleanInterval(in.DefaultTestIntervalDays.Value, &fields)
 		}
-		if err := fields.err("invalid parameter"); err != nil {
+		if err := fields.Err(); err != nil {
 			return err
 		}
 		if err := checkNameFree(ctx, q, name, id); err != nil {
@@ -202,7 +202,7 @@ func (s *Service) SetDefinitionArchived(ctx context.Context, id int64, archived 
 		q := db.Q(tx)
 		cur, err := q.GetParameterDefinition(ctx, id)
 		if errors.Is(err, sql.ErrNoRows) {
-			return notFound("parameter")
+			return errNoParameter
 		}
 		if err != nil {
 			return fmt.Errorf("read parameter definition: %w", err)
@@ -239,50 +239,50 @@ func (s *Service) DeleteDefinition(ctx context.Context, id int64) error {
 		}
 		cur, err := q.GetParameterDefinition(ctx, id)
 		if errors.Is(err, sql.ErrNoRows) {
-			return notFound("parameter")
+			return errNoParameter
 		}
 		if err != nil {
 			return fmt.Errorf("read parameter definition: %w", err)
 		}
 		if cur.PresetKey != nil {
-			return httpx.Conflict("built-in parameters cannot be deleted, archive it instead")
+			return errBuiltinParameter
 		}
-		return httpx.Conflict("this parameter has test results, archive it instead")
+		return errParameterHasData
 	})
 }
 
-func cleanName(name string, fields fieldErrors) string {
+func cleanName(name string, fields *httpx.FieldErrors) string {
 	name, short := cleanText(name, maxNameRunes)
 	switch {
 	case name == "":
-		fields.add("name", "must not be blank")
+		fields.Add("name", httpx.CodeRequired)
 	case !short:
-		fields.add("name", fmt.Sprintf("must be at most %d characters", maxNameRunes))
+		fields.Add("name", httpx.CodeTooLong)
 	}
 	return name
 }
 
-func cleanUnitLabel(label string, fields fieldErrors) string {
+func cleanUnitLabel(label string, fields *httpx.FieldErrors) string {
 	label, short := cleanText(label, maxUnitLabelRunes)
 	if !short {
-		fields.add("unit_label", fmt.Sprintf("must be at most %d characters", maxUnitLabelRunes))
+		fields.Add("unit_label", httpx.CodeTooLong)
 	}
 	return label
 }
 
-func cleanDecimals(v int, fields fieldErrors) int64 {
+func cleanDecimals(v int, fields *httpx.FieldErrors) int64 {
 	if v < 0 || v > 4 {
-		fields.add("decimals", "must be between 0 and 4")
+		fields.Add("decimals", httpx.CodeOutOfRange)
 	}
 	return int64(v)
 }
 
-func cleanInterval(v *int, fields fieldErrors) *int64 {
+func cleanInterval(v *int, fields *httpx.FieldErrors) *int64 {
 	if v == nil {
 		return nil
 	}
 	if *v < 1 || *v > maxTestInterval {
-		fields.add("default_test_interval_days", fmt.Sprintf("must be between 1 and %d", maxTestInterval))
+		fields.Add("default_test_interval_days", httpx.CodeOutOfRange)
 		return nil
 	}
 	n := int64(*v)
@@ -290,31 +290,31 @@ func cleanInterval(v *int, fields fieldErrors) *int64 {
 }
 
 // checkRangePair reports a low limit above the high one, or a limit that is not a finite number.
-func checkRangePair(low, high *float64, lowField, highField string, fields fieldErrors) {
+func checkRangePair(low, high *float64, lowField, highField string, fields *httpx.FieldErrors) {
 	for _, p := range []struct {
 		v     *float64
 		field string
 	}{{low, lowField}, {high, highField}} {
 		if p.v != nil && (math.IsNaN(*p.v) || math.IsInf(*p.v, 0)) {
-			fields.add(p.field, "must be a finite number")
+			fields.Add(p.field, httpx.CodeInvalid)
 		}
 	}
 	if low != nil && high != nil && *low > *high {
-		fields.add(lowField, "must not be above "+highField)
+		fields.Add(lowField, httpx.CodeOutOfRange)
 	}
 }
 
 // mergeCanonical applies a display-unit change to a canonical limit: unset keeps it, null clears it, a number replaces it.
-func mergeCanonical(m meta, current *float64, change httpx.Nullable[float64], field string, fields fieldErrors) *float64 {
+func mergeCanonical(m meta, current *float64, change httpx.Nullable[float64], field string, fields *httpx.FieldErrors) *float64 {
 	if !change.Set {
 		return current
 	}
 	if change.Value == nil {
 		return nil
 	}
-	c, msg := m.canonical(*change.Value)
-	if msg != "" {
-		fields.add(field, msg)
+	c, code := m.canonical(*change.Value)
+	if code != "" {
+		fields.Add(field, code)
 		return current
 	}
 	return &c
@@ -326,7 +326,7 @@ func checkNameFree(ctx context.Context, q *dbgen.Queries, name string, selfID in
 		return fmt.Errorf("check parameter name: %w", err)
 	}
 	if n > 0 {
-		return httpx.Validation("invalid parameter", map[string]string{"name": "another parameter already has this name"})
+		return httpx.Reject("invalid parameter", "name", httpx.CodeTaken)
 	}
 	return nil
 }

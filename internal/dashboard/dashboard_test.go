@@ -1,7 +1,6 @@
 package dashboard
 
 import (
-	"fmt"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -166,31 +165,31 @@ func TestReplaceValidation(t *testing.T) {
 		cards any
 		want  map[string]string
 	}{
-		{"no cards", []map[string]any{}, map[string]string{"cards": "must have at least one card"}},
-		{"cards missing", nil, map[string]string{"cards": "must have at least one card"}},
-		{"too many", tooMany, map[string]string{"cards": fmt.Sprintf("must have at most %d cards", maxCards)}},
-		{"missing type", []map[string]any{{}}, map[string]string{"cards.0.card_type": "is required"}},
-		{"unknown type", []map[string]any{{"card_type": "feeding_today"}}, map[string]string{"cards.0.card_type": "must be one of parameter, parameter_chart, tests_due"}},
-		{"parameter without id", []map[string]any{{"card_type": "tests_due"}, {"card_type": "parameter"}}, map[string]string{"cards.1.parameter_id": "is required for this card type"}},
-		{"chart without id", []map[string]any{{"card_type": "parameter_chart"}}, map[string]string{"cards.0.parameter_id": "is required for this card type"}},
-		{"disabled parameter", []map[string]any{{"card_type": "parameter", "parameter_id": off}}, map[string]string{"cards.0.parameter_id": "must be a parameter enabled on this tank"}},
-		{"other tank's parameter", []map[string]any{{"card_type": "parameter", "parameter_id": foreign}}, map[string]string{"cards.0.parameter_id": "must be a parameter enabled on this tank"}},
-		{"unknown parameter", []map[string]any{{"card_type": "parameter_chart", "parameter_id": 99999}}, map[string]string{"cards.0.parameter_id": "must be a parameter enabled on this tank"}},
-		{"tests_due with parameter", []map[string]any{{"card_type": "tests_due", "parameter_id": on}}, map[string]string{"cards.0.parameter_id": "must be empty for this card type"}},
-		{"bad size", []map[string]any{{"card_type": "tests_due", "size": "huge"}}, map[string]string{"cards.0.size": "must be one of normal, wide"}},
-		{"options not an object", []map[string]any{{"card_type": "tests_due", "options": []int{1}}}, map[string]string{"cards.0.options": "must be a JSON object"}},
-		{"options a string", []map[string]any{{"card_type": "tests_due", "options": "x"}}, map[string]string{"cards.0.options": "must be a JSON object"}},
-		{"options too big", []map[string]any{{"card_type": "tests_due", "options": longOptions}}, map[string]string{"cards.0.options": fmt.Sprintf("must be at most %d bytes", maxOptionsBytes)}},
-		{"duplicate tests_due", []map[string]any{{"card_type": "tests_due"}, {"card_type": "tests_due"}}, map[string]string{"cards.1": "duplicates cards.0"}},
+		{"no cards", []map[string]any{}, map[string]string{"cards": "required"}},
+		{"cards missing", nil, map[string]string{"cards": "required"}},
+		{"too many", tooMany, map[string]string{"cards": "too_long"}},
+		{"missing type", []map[string]any{{}}, map[string]string{"cards.0.card_type": "required"}},
+		{"unknown type", []map[string]any{{"card_type": "feeding_today"}}, map[string]string{"cards.0.card_type": "invalid"}},
+		{"parameter without id", []map[string]any{{"card_type": "tests_due"}, {"card_type": "parameter"}}, map[string]string{"cards.1.parameter_id": "required"}},
+		{"chart without id", []map[string]any{{"card_type": "parameter_chart"}}, map[string]string{"cards.0.parameter_id": "required"}},
+		{"disabled parameter", []map[string]any{{"card_type": "parameter", "parameter_id": off}}, map[string]string{"cards.0.parameter_id": "invalid"}},
+		{"other tank's parameter", []map[string]any{{"card_type": "parameter", "parameter_id": foreign}}, map[string]string{"cards.0.parameter_id": "invalid"}},
+		{"unknown parameter", []map[string]any{{"card_type": "parameter_chart", "parameter_id": 99999}}, map[string]string{"cards.0.parameter_id": "invalid"}},
+		{"tests_due with parameter", []map[string]any{{"card_type": "tests_due", "parameter_id": on}}, map[string]string{"cards.0.parameter_id": "invalid"}},
+		{"bad size", []map[string]any{{"card_type": "tests_due", "size": "huge"}}, map[string]string{"cards.0.size": "invalid"}},
+		{"options not an object", []map[string]any{{"card_type": "tests_due", "options": []int{1}}}, map[string]string{"cards.0.options": "invalid"}},
+		{"options a string", []map[string]any{{"card_type": "tests_due", "options": "x"}}, map[string]string{"cards.0.options": "invalid"}},
+		{"options too big", []map[string]any{{"card_type": "tests_due", "options": longOptions}}, map[string]string{"cards.0.options": "too_long"}},
+		{"duplicate tests_due", []map[string]any{{"card_type": "tests_due"}, {"card_type": "tests_due"}}, map[string]string{"cards.1": "invalid"}},
 		{"duplicate parameter", []map[string]any{
 			{"card_type": "parameter", "parameter_id": on}, {"card_type": "parameter_chart", "parameter_id": on}, {"card_type": "parameter", "parameter_id": on},
-		}, map[string]string{"cards.2": "duplicates cards.0"}},
+		}, map[string]string{"cards.2": "invalid"}},
 		{"several problems at once", []map[string]any{
 			{"card_type": "nope"}, {"card_type": "parameter"}, {"card_type": "tests_due", "size": "tiny"},
 		}, map[string]string{
-			"cards.0.card_type":    "must be one of parameter, parameter_chart, tests_due",
-			"cards.1.parameter_id": "is required for this card type",
-			"cards.2.size":         "must be one of normal, wide",
+			"cards.0.card_type":    "invalid",
+			"cards.1.parameter_id": "required",
+			"cards.2.size":         "invalid",
 		}},
 	}
 	for _, c := range cases {

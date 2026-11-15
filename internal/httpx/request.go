@@ -13,7 +13,7 @@ func IncludeArchived(r *http.Request) (bool, error) {
 	}
 	v, err := strconv.ParseBool(raw)
 	if err != nil {
-		return false, Validation("invalid query", map[string]string{"include_archived": "must be true or false"})
+		return false, rejection("invalid query", "include_archived")
 	}
 	return v, nil
 }

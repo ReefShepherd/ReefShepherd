@@ -26,7 +26,7 @@ func Routes(mux *http.ServeMux, deps Deps) {
 }
 
 func (s *Service) register(mux *http.ServeMux) {
-	handle := func(h httpx.HandlerFunc) http.Handler { return httpx.Handle(s.Logger, h) }
+	handle := func(h httpx.HandlerFunc) http.Handler { return httpx.Handle(s.Logger, h, apiError) }
 	mux.Handle("GET /api/v1/parameters", handle(s.listParameters))
 	mux.Handle("POST /api/v1/parameters", handle(s.createParameter))
 	mux.Handle("PATCH /api/v1/parameters/{id}", handle(s.patchParameter))

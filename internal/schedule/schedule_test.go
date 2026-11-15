@@ -4,6 +4,8 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+
+	"github.com/reefshepherd/reefshepherd/internal/httpx"
 )
 
 func ip(v int) *int       { return &v }
@@ -69,6 +71,67 @@ func TestParse(t *testing.T) {
 				t.Errorf("got  %+v\nwant %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+// fieldErrorOf returns the field and code a validation failure reports.
+func fieldErrorOf(t *testing.T, err error) (field, code string) {
+	t.Helper()
+	var fe interface{ FieldError() (field, code string) }
+	if !errors.As(err, &fe) {
+		t.Fatalf("err = %v, want an error with a FieldError method", err)
+	}
+	return fe.FieldError()
+}
+
+func TestValidationFailuresReportAFieldErrorCode(t *testing.T) {
+	tests := []struct {
+		name string
+		in   Columns
+		code string
+	}{
+		{"unknown kind", Columns{Kind: "yearly"}, "invalid"},
+		{"empty kind", Columns{}, "invalid"},
+		{"after_last without interval", Columns{Kind: "after_last"}, "out_of_range"},
+		{"after_last negative interval", Columns{Kind: "after_last", IntervalDays: ip(-2)}, "out_of_range"},
+		{"after_last huge interval", Columns{Kind: "after_last", IntervalDays: ip(1 << 40)}, "out_of_range"},
+		{"every_n_days without anchor", Columns{Kind: "every_n_days", IntervalDays: ip(2)}, "required"},
+		{"every_n_days empty anchor", Columns{Kind: "every_n_days", IntervalDays: ip(2), AnchorDate: sp("")}, "required"},
+		{"every_n_days bad anchor", Columns{Kind: "every_n_days", IntervalDays: ip(2), AnchorDate: sp("2026-02-30")}, "invalid"},
+		{"anchor year out of range", Columns{Kind: "every_n_days", IntervalDays: ip(2), AnchorDate: sp("1700-01-01")}, "out_of_range"},
+		{"weekly mask too big", Columns{Kind: "weekly", Weekdays: ip(128)}, "out_of_range"},
+		{"weekly multi week without anchor", Columns{Kind: "weekly", Weekdays: ip(1), IntervalWeeks: 2}, "required"},
+		{"monthly day 32", Columns{Kind: "monthly", MonthDay: ip(32)}, "out_of_range"},
+		{"due time not a time", Columns{Kind: "none", DueTime: "9am"}, "invalid"},
+		{"due time past 23:59", Columns{Kind: "none", DueTime: "25:00"}, "invalid"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Parse(tc.in)
+			if !errors.Is(err, ErrInvalid) {
+				t.Fatalf("err = %v, want ErrInvalid", err)
+			}
+			if field, code := fieldErrorOf(t, err); field != "schedule" || code != tc.code {
+				t.Errorf("field %q code %q, want schedule %q", field, code, tc.code)
+			}
+		})
+	}
+	if _, code := fieldErrorOf(t, (Schedule{Kind: None, DueTime: tod(24, 0)}).Validate()); code != "out_of_range" {
+		t.Errorf("hour 24: code %q, want out_of_range", code)
+	}
+	if _, code := fieldErrorOf(t, (Schedule{Kind: None, AnchorDate: Date{2026, 2, 30}}).Validate()); code != "invalid" {
+		t.Errorf("impossible anchor date: code %q, want invalid", code)
+	}
+}
+
+func TestCodesAreOnTheAPIsClosedList(t *testing.T) {
+	for _, c := range []struct {
+		local string
+		api   httpx.Code
+	}{{codeRequired, httpx.CodeRequired}, {codeInvalid, httpx.CodeInvalid}, {codeOutOfRange, httpx.CodeOutOfRange}} {
+		if httpx.Code(c.local) != c.api {
+			t.Errorf("local code %q is not the API code %q", c.local, c.api)
+		}
 	}
 }
 

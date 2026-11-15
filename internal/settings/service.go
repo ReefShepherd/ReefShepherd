@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/reefshepherd/reefshepherd/internal/config"
 	"github.com/reefshepherd/reefshepherd/internal/db"
@@ -69,66 +68,61 @@ func (s *Store) Values(ctx context.Context) (Values, error) {
 	return v, nil
 }
 
-// Validate returns a message per field of c that Apply would reject, keyed by the API field name.
-func (c Changes) Validate() map[string]string {
-	rejected := map[string]string{}
-	add := func(field string, err error) {
-		if err != nil {
-			rejected[field] = strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": ")
-		}
-	}
+// Validate returns the rejections Apply would make, joined into one error that is nil when every field is acceptable.
+func (c Changes) Validate() error {
+	var rejected []error
 	if c.InstanceName != nil {
 		_, err := cleanInstanceName(*c.InstanceName)
-		add("instance_name", err)
+		rejected = append(rejected, err)
 	}
 	if c.Timezone != nil {
-		add("timezone", checkTimezone(*c.Timezone))
+		rejected = append(rejected, checkTimezone(*c.Timezone))
 	}
 	if c.ReminderDefaultTime != nil {
-		add("reminder_default_time", checkReminderTime(*c.ReminderDefaultTime))
+		rejected = append(rejected, checkReminderTime(*c.ReminderDefaultTime))
 	}
 	for family, unit := range c.Units {
 		_, err := checkUnit(family, unit)
-		add("units."+string(family), err)
+		rejected = append(rejected, err)
 	}
-	return rejected
+	return errors.Join(rejected...)
 }
 
-// Apply writes the changes unless some field is invalid, in which case it writes nothing and returns a message per rejected field; the map is never nil.
-func (s *Store) Apply(ctx context.Context, c Changes) (rejected map[string]string, err error) {
-	if rejected = c.Validate(); len(rejected) > 0 {
-		return rejected, nil
+// Apply writes the changes unless some field is invalid, in which case it writes nothing and returns Validate's error.
+func (s *Store) Apply(ctx context.Context, c Changes) error {
+	if err := c.Validate(); err != nil {
+		return err
 	}
 	if c.InstanceName != nil {
 		if err := s.SetInstanceName(ctx, *c.InstanceName); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	if c.Timezone != nil {
 		if err := s.SetTimezone(ctx, *c.Timezone); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	if c.ReminderDefaultTime != nil {
 		if err := s.SetReminderDefaultTime(ctx, *c.ReminderDefaultTime); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	for family, unit := range c.Units {
 		if err := s.SetUnit(ctx, family, unit); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return rejected, nil
+	return nil
 }
 
-// SwitchAuthMode changes the login mode and keeps the user that everyone acts as in step with it, refusing a change that would leave nobody able to sign in; the error wraps ErrInvalid.
+// SwitchAuthMode changes the login mode and keeps the user that everyone acts as in step with it, refusing a change that would leave nobody able to sign in; the error is an ErrInvalid for the auth_mode field.
 func (s *Store) SwitchAuthMode(ctx context.Context, mode string) error {
 	switch mode {
 	case config.AuthModeDisabled:
 		id, err := db.Q(s.r).FirstEnabledAdminID(ctx)
 		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("%w: there is no enabled admin to act as", ErrInvalid)
+			return reject("auth_mode", codeInvalid, "there is no enabled admin to act as")
 		}
 		if err != nil {
 			return fmt.Errorf("find first admin: %w", err)
@@ -144,12 +138,12 @@ func (s *Store) SwitchAuthMode(ctx context.Context, mode string) error {
 			return fmt.Errorf("count admins with a password: %w", err)
 		}
 		if n == 0 {
-			return fmt.Errorf("%w: set a password for an admin first", ErrInvalid)
+			return reject("auth_mode", codeInvalid, "set a password for an admin first")
 		}
 		if err := s.SetAuthMode(ctx, mode); err != nil {
 			return err
 		}
 		return s.ClearAuthDisabledUserID(ctx)
 	}
-	return fmt.Errorf("%w: auth mode %q", ErrInvalid, mode)
+	return reject("auth_mode", codeInvalid, "auth mode %q", mode)
 }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -138,10 +139,21 @@ func (e *env) fail(status int, code, method, path string, body any) testutil.Err
 	return testutil.ExpectError(e.t, e.do(method, path, body).ResponseRecorder, status, code)
 }
 
-// invalid expects a 422 validation error naming exactly the given fields.
-func (e *env) invalid(method, path string, body any, fields ...string) testutil.ErrorBody {
+// invalid expects a 422 validation error naming exactly the given fields, each written as field=code.
+func (e *env) invalid(method, path string, body any, want ...string) testutil.ErrorBody {
 	e.t.Helper()
-	return testutil.ExpectError(e.t, e.do(method, path, body).ResponseRecorder, http.StatusUnprocessableEntity, "validation", fields...)
+	names := make([]string, len(want))
+	for i, w := range want {
+		names[i], _, _ = strings.Cut(w, "=")
+	}
+	b := testutil.ExpectError(e.t, e.do(method, path, body).ResponseRecorder, http.StatusUnprocessableEntity, "validation", names...)
+	for _, w := range want {
+		field, code, _ := strings.Cut(w, "=")
+		if b.Error.Fields[field] != code {
+			e.t.Errorf("%s: code %q, want %q (fields %v)", field, b.Error.Fields[field], code, b.Error.Fields)
+		}
+	}
+	return b
 }
 
 type entry struct {

@@ -193,11 +193,10 @@ func TestSetupValidationRejectsEverythingAtOnceAndWritesNothing(t *testing.T) {
 		"instance_name": "   ",
 	})
 	b := testutil.ExpectError(t, rec, http.StatusUnprocessableEntity, "validation")
-	for _, f := range []string{"username", "password", "theme", "auth_mode", "timezone", "units.temperature", "units.nonsense", "instance_name"} {
-		if b.Error.Fields[f] == "" {
-			t.Errorf("no message for field %q: %v", f, b.Error.Fields)
-		}
-	}
+	expectCodes(t, b, map[string]string{
+		"username": "too_short", "password": "too_short", "theme": "invalid", "auth_mode": "invalid", "timezone": "invalid",
+		"units.temperature": "invalid", "units.nonsense": "invalid", "instance_name": "required",
+	})
 	if len(rec.Result().Cookies()) != 0 {
 		t.Error("a failed setup set a cookie")
 	}
@@ -282,9 +281,7 @@ func TestSetupHonoursTheEnvironmentOverride(t *testing.T) {
 	a := newAPITestApp(t, config.Config{AuthMode: config.AuthModePassword})
 	c := newClient(t, a)
 	b := testutil.ExpectError(t, c.do(http.MethodPost, "/api/v1/setup", map[string]any{"auth_mode": "disabled"}), http.StatusConflict, "env_locked")
-	if b.Error.Fields["auth_mode"] == "" {
-		t.Errorf("body = %+v", b)
-	}
+	expectCodes(t, b, map[string]string{"auth_mode": "locked"})
 	if testutil.Count(t, a.db, `SELECT COUNT(*) FROM users`) != 0 {
 		t.Error("a user was created")
 	}

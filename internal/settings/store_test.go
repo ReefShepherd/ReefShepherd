@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/reefshepherd/reefshepherd/internal/db"
+	"github.com/reefshepherd/reefshepherd/internal/httpx"
 	"github.com/reefshepherd/reefshepherd/internal/testutil"
 	"github.com/reefshepherd/reefshepherd/internal/units"
 )
@@ -145,30 +146,43 @@ func TestSettersRoundTrip(t *testing.T) {
 	must(s.ClearAuthDisabledUserID(ctx))
 }
 
+func TestCodesAreOnTheAPIsClosedList(t *testing.T) {
+	if httpx.Code(codeRequired) != httpx.CodeRequired || httpx.Code(codeInvalid) != httpx.CodeInvalid {
+		t.Errorf("local codes %q and %q differ from the API's", codeRequired, codeInvalid)
+	}
+}
+
 func TestSettersRejectInvalidValues(t *testing.T) {
 	s, d := newStore(t)
 	ctx := t.Context()
 
-	cases := map[string]error{
-		"blank instance name":       s.SetInstanceName(ctx, "   "),
-		"unknown timezone":          s.SetTimezone(ctx, "Mars/Olympus"),
-		"empty timezone":            s.SetTimezone(ctx, ""),
-		"Local timezone":            s.SetTimezone(ctx, "Local"),
-		"unknown auth mode":         s.SetAuthMode(ctx, "ldap"),
-		"zero user id":              s.SetAuthDisabledUserID(ctx, 0),
-		"negative user id":          s.SetAuthDisabledUserID(ctx, -3),
-		"hour without leading zero": s.SetReminderDefaultTime(ctx, "9:00"),
-		"hour out of range":         s.SetReminderDefaultTime(ctx, "24:00"),
-		"minute out of range":       s.SetReminderDefaultTime(ctx, "09:60"),
-		"time with seconds":         s.SetReminderDefaultTime(ctx, "09:00:00"),
-		"fahrenheit for salinity":   s.SetUnit(ctx, units.Salinity, units.Fahrenheit),
-		"unknown unit":              s.SetUnit(ctx, units.Volume, units.Unit("gallon")),
-		"fixed family":              s.SetUnit(ctx, units.Fixed, units.None),
-		"unknown family":            s.SetUnit(ctx, units.Family("pressure"), units.PPM),
+	cases := []struct {
+		name        string
+		err         error
+		field, code string
+	}{
+		{"blank instance name", s.SetInstanceName(ctx, "   "), "instance_name", "required"},
+		{"unknown timezone", s.SetTimezone(ctx, "Mars/Olympus"), "timezone", "invalid"},
+		{"empty timezone", s.SetTimezone(ctx, ""), "timezone", "invalid"},
+		{"Local timezone", s.SetTimezone(ctx, "Local"), "timezone", "invalid"},
+		{"unknown auth mode", s.SetAuthMode(ctx, "ldap"), "auth_mode", "invalid"},
+		{"zero user id", s.SetAuthDisabledUserID(ctx, 0), "auth_disabled_user_id", "invalid"},
+		{"negative user id", s.SetAuthDisabledUserID(ctx, -3), "auth_disabled_user_id", "invalid"},
+		{"hour without leading zero", s.SetReminderDefaultTime(ctx, "9:00"), "reminder_default_time", "invalid"},
+		{"hour out of range", s.SetReminderDefaultTime(ctx, "24:00"), "reminder_default_time", "invalid"},
+		{"minute out of range", s.SetReminderDefaultTime(ctx, "09:60"), "reminder_default_time", "invalid"},
+		{"time with seconds", s.SetReminderDefaultTime(ctx, "09:00:00"), "reminder_default_time", "invalid"},
+		{"fahrenheit for salinity", s.SetUnit(ctx, units.Salinity, units.Fahrenheit), "units.salinity", "invalid"},
+		{"unknown unit", s.SetUnit(ctx, units.Volume, units.Unit("gallon")), "units.volume", "invalid"},
+		{"fixed family", s.SetUnit(ctx, units.Fixed, units.None), "units.fixed", "invalid"},
+		{"unknown family", s.SetUnit(ctx, units.Family("pressure"), units.PPM), "units.pressure", "invalid"},
 	}
-	for name, err := range cases {
-		if !errors.Is(err, ErrInvalid) {
-			t.Errorf("%s: err = %v, want ErrInvalid", name, err)
+	for _, c := range cases {
+		if !errors.Is(c.err, ErrInvalid) {
+			t.Errorf("%s: err = %v, want ErrInvalid", c.name, c.err)
+		}
+		if got := fieldCodes(c.err); len(got) != 1 || got[c.field] != c.code {
+			t.Errorf("%s: field errors = %v, want %s: %s", c.name, got, c.field, c.code)
 		}
 	}
 	if _, err := s.GetUnit(ctx, units.Fixed); !errors.Is(err, ErrInvalid) {

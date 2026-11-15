@@ -206,7 +206,7 @@ func (s *Service) verifyTOTP(ctx context.Context, userID int64, code string) (bo
 	return n == 1, nil
 }
 
-// ConfirmTOTPCode checks a signed-in user's current authenticator code, counting a mistake against the same limits as a login; a failure is an *httpx.APIError whose field is field.
+// ConfirmTOTPCode checks a signed-in user's current authenticator code, counting a mistake against the same limits as a login; a failure is a field error for field.
 func (s *Service) ConfirmTOTPCode(ctx context.Context, r *http.Request, userID int64, code, field string) error {
 	u, err := db.Q(s.DB.R).GetUserCredentialsByID(ctx, userID)
 	if err != nil {
@@ -221,7 +221,7 @@ func (s *Service) ConfirmTOTPCode(ctx context.Context, r *http.Request, userID i
 		return err
 	}
 	if !ok {
-		return httpx.Validation("that code is not valid", map[string]string{field: "that code is not valid"})
+		return httpx.Reject("that code is not valid", field, httpx.CodeIncorrect)
 	}
 	s.limiter.succeed(try)
 	return nil

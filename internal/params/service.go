@@ -2,7 +2,6 @@ package params
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,7 +11,6 @@ import (
 	"github.com/reefshepherd/reefshepherd/internal/db"
 	"github.com/reefshepherd/reefshepherd/internal/db/dbgen"
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
-	"github.com/reefshepherd/reefshepherd/internal/schedule"
 	"github.com/reefshepherd/reefshepherd/internal/units"
 )
 
@@ -28,7 +26,7 @@ const (
 	maxFuture = 24 * time.Hour
 )
 
-// Service is the parameter and result logic behind the HTTP handlers; its errors are *httpx.APIError when the client caused them.
+// Service is the parameter and result logic behind the HTTP handlers; the errors it returns for a client mistake are field errors and the sentinels below.
 type Service struct {
 	Deps
 	// r serves reads; it is a field so a test can count the statements a read issues.
@@ -53,39 +51,14 @@ type Result struct {
 	CreatedBy   *int64
 }
 
-// nullableOf reads a raw JSON field that may be absent, null or a value of type T; a value of the wrong type becomes a field error.
-func nullableOf[T any](raw json.RawMessage, field, wanted string, fields fieldErrors) httpx.Nullable[T] {
-	if len(raw) == 0 {
-		return httpx.Nullable[T]{}
-	}
-	if string(raw) == "null" {
-		return httpx.Nullable[T]{Set: true}
-	}
-	var v T
-	if err := json.Unmarshal(raw, &v); err != nil {
-		fields.add(field, "must be "+wanted)
-		return httpx.Nullable[T]{}
-	}
-	return httpx.Nullable[T]{Set: true, Value: &v}
-}
-
-// fieldErrors collects what is wrong with a request, keyed by the API field name.
-type fieldErrors map[string]string
-
-func (f fieldErrors) add(field, message string) {
-	if _, taken := f[field]; !taken {
-		f[field] = message
-	}
-}
-
-func (f fieldErrors) err(message string) error {
-	if len(f) == 0 {
-		return nil
-	}
-	return httpx.Validation(message, f)
-}
-
-func notFound(what string) error { return httpx.NotFound("no such " + what) }
+// Refusals the handlers turn into 404 and 409 responses; the text is the message sent.
+var (
+	errNoParameter       = errors.New("no such parameter")
+	errNoResult          = errors.New("no such result")
+	errBuiltinParameter  = errors.New("built-in parameters cannot be deleted, archive it instead")
+	errParameterHasData  = errors.New("this parameter has test results, archive it instead")
+	errParameterArchived = errors.New("this parameter is archived")
+)
 
 func cleanText(s string, maxRunes int) (string, bool) {
 	s = strings.TrimSpace(s)
@@ -93,12 +66,9 @@ func cleanText(s string, maxRunes int) (string, bool) {
 }
 
 // parseTimestamp reads an RFC 3339 instant and drops the sub-second part.
-func parseTimestamp(s string) (time.Time, error) {
+func parseTimestamp(s string) (time.Time, bool) {
 	t, err := db.ParseTime(s)
-	if err != nil {
-		return time.Time{}, errors.New("must be an RFC 3339 timestamp such as 2026-10-24T09:30:00Z")
-	}
-	return t.Truncate(time.Second), nil
+	return t.Truncate(time.Second), err == nil
 }
 
 // meta says how one parameter is shown: the unit chosen for its family, or its own label and decimals when the family is fixed.
@@ -129,7 +99,8 @@ func (d *display) meta(family, label string, decimals int64) (meta, error) {
 	if !ok {
 		var err error
 		if u, err = d.s.Settings.GetUnit(d.ctx, f); err != nil {
-			return meta{}, fmt.Errorf("read display unit for %s: %w", f, err)
+			// Not wrapped: an unknown stored unit family is a server fault and must not reach the client as a field error.
+			return meta{}, fmt.Errorf("read display unit for %s: %v", f, err) //nolint:errorlint // see above
 		}
 		d.units[f] = u
 	}
@@ -153,16 +124,16 @@ func (m meta) showPtr(canonical *float64) *float64 {
 	return &v
 }
 
-// canonical converts a display value to the canonical unit, with a message fit for a field error when it cannot.
-func (m meta) canonical(v float64) (float64, string) {
+// canonical converts a display value to the canonical unit, with a field error code when it cannot.
+func (m meta) canonical(v float64) (float64, httpx.Code) {
 	c, err := units.ToCanonical(m.family, m.unit, v)
 	switch {
 	case err == nil:
 		return c, ""
 	case errors.Is(err, units.ErrNotFinite):
-		return 0, "must be a finite number"
+		return 0, httpx.CodeInvalid
 	default:
-		return 0, "is outside the possible range"
+		return 0, httpx.CodeOutOfRange
 	}
 }
 
@@ -188,9 +159,4 @@ func (s *Service) location(ctx context.Context) (*time.Location, error) {
 		return nil, fmt.Errorf("load timezone %q: %w", name, err)
 	}
 	return loc, nil
-}
-
-// scheduleMessage turns a schedule validation error into the text of a field error.
-func scheduleMessage(err error) string {
-	return strings.TrimSuffix(err.Error(), ": "+schedule.ErrInvalid.Error())
 }

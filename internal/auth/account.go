@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -22,14 +23,14 @@ func (s *Service) beginAttempt(r *http.Request, username string) (attempt, error
 	return try, nil
 }
 
-// ConfirmPassword checks a signed-in user's own password, counting a mistake against the same limits as a login; a failure is an *httpx.APIError whose field is field.
+// ConfirmPassword checks a signed-in user's own password, counting a mistake against the same limits as a login; a failure is a field error for field.
 func (s *Service) ConfirmPassword(ctx context.Context, r *http.Request, userID int64, plain, field string) error {
 	u, err := db.Q(s.DB.R).GetUserCredentialsByID(ctx, userID)
 	if err != nil {
 		return fmt.Errorf("read user: %w", err)
 	}
 	if u.PasswordHash == nil {
-		return httpx.Validation("this account has no password", map[string]string{field: "this account has no password"})
+		return httpx.Reject("this account has no password", field, httpx.CodeInvalid)
 	}
 	try, err := s.beginAttempt(r, u.Username)
 	if err != nil {
@@ -40,7 +41,7 @@ func (s *Service) ConfirmPassword(ctx context.Context, r *http.Request, userID i
 		return fmt.Errorf("verify password: %w", err)
 	}
 	if !ok {
-		return httpx.Validation("incorrect password", map[string]string{field: "incorrect password"})
+		return httpx.Reject("incorrect password", field, httpx.CodeIncorrect)
 	}
 	s.limiter.succeed(try)
 	if rehash {
@@ -60,10 +61,25 @@ func (s *Service) rehash(ctx context.Context, userID int64, plain, old string) {
 	}
 }
 
+// CheckPassword adds a field error for field when plain breaks the password length or text rules.
+func CheckPassword(fields *httpx.FieldErrors, field, plain string) {
+	switch err := password.Validate(plain); {
+	case err == nil:
+	case errors.Is(err, password.ErrTooShort):
+		fields.Add(field, httpx.CodeTooShort)
+	case errors.Is(err, password.ErrTooLong):
+		fields.Add(field, httpx.CodeTooLong)
+	default:
+		fields.Add(field, httpx.CodeInvalid)
+	}
+}
+
 // ChangePassword sets a new password after checking the current one, which a passwordless account may omit, and ends the user's other sessions.
 func (s *Service) ChangePassword(ctx context.Context, r *http.Request, userID int64, current, next string) error {
-	if err := password.Validate(next); err != nil {
-		return httpx.Validation("invalid password", map[string]string{"new_password": err.Error()})
+	fields := httpx.FieldErrors{Message: "invalid password"}
+	CheckPassword(&fields, "new_password", next)
+	if err := fields.Err(); err != nil {
+		return err
 	}
 	u, err := db.Q(s.DB.R).GetUserCredentialsByID(ctx, userID)
 	if err != nil {

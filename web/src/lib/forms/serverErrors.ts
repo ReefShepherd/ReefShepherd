@@ -78,7 +78,7 @@ define(['default_test_interval_days'], ['invalid', 'out_of_range'], (max) =>
 );
 define(['value_missing'], ['required'], () => m.tests_value_needed());
 define(['parameter_id'], ['invalid', 'required'], () => m.form_err_parameter());
-define(['measured_at'], ['invalid'], () => m.tests_time_invalid());
+define(['measured_at'], ['invalid', 'out_of_range'], () => m.tests_time_invalid());
 
 /** The text for a field the server or the browser refused; limit is the field's maximum length (or other bound) when the form knows it. */
 export function fieldMessage(field: string, code: FieldCode, limit?: number): string {

@@ -22,7 +22,7 @@ type Deps struct {
 // Routes registers the tank endpoints behind the caller's sign-in check, where only an admin can delete a tank.
 func Routes(mux *http.ServeMux, deps Deps) {
 	svc := NewService(deps)
-	handle := func(h httpx.HandlerFunc) http.Handler { return httpx.Handle(svc.Logger, h) }
+	handle := func(h httpx.HandlerFunc) http.Handler { return httpx.Handle(svc.Logger, h, apiError) }
 	mux.Handle("GET /api/v1/tanks", handle(svc.listTanks))
 	mux.Handle("POST /api/v1/tanks", handle(svc.createTank))
 	mux.Handle("GET /api/v1/tanks/{id}", handle(svc.getTank))

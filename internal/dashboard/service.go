@@ -5,10 +5,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/reefshepherd/reefshepherd/internal/db"
@@ -54,14 +52,6 @@ func lookupType(name string) (cardType, bool) {
 	return cardType{}, false
 }
 
-func typeNames() string {
-	names := make([]string, len(cardTypes))
-	for i, t := range cardTypes {
-		names[i] = t.name
-	}
-	return strings.Join(names, ", ")
-}
-
 // Card is one dashboard card as the API shows it.
 type Card struct {
 	ID          int64           `json:"id"`
@@ -86,7 +76,7 @@ type CardInput struct {
 	Options     json.RawMessage `json:"options"`
 }
 
-// Service is the dashboard logic behind the HTTP handlers; its errors are *httpx.APIError when the client caused them.
+// Service is the dashboard logic behind the HTTP handlers; the errors it returns for a client mistake are field errors and tanks.ErrNotFound.
 type Service struct {
 	Deps
 	now func() time.Time
@@ -160,9 +150,9 @@ func (s *Service) Replace(ctx context.Context, userID, tankID int64, cards []Car
 		if err != nil {
 			return fmt.Errorf("list enabled parameters: %w", err)
 		}
-		rows, fields := validate(cards, enabled)
-		if len(fields) > 0 {
-			return httpx.Validation("invalid dashboard", fields)
+		rows, err := validate(cards, enabled)
+		if err != nil {
+			return err
 		}
 		_, hidden, err := loadCards(ctx, q, userID, tankID, enabled)
 		if err != nil {
@@ -259,22 +249,22 @@ func list(ctx context.Context, q *dbgen.Queries, userID, tankID int64) (Layout, 
 }
 
 // validate checks a replacement list against the card types and the tank's enabled parameters, returning the rows to insert or the problems keyed by field.
-func validate(cards []CardInput, enabled []int64) ([]dbgen.InsertDashboardCardParams, map[string]string) {
-	fields := map[string]string{}
-	if len(cards) == 0 {
-		fields["cards"] = "must have at least one card"
-		return nil, fields
-	}
-	if len(cards) > maxCards {
-		fields["cards"] = fmt.Sprintf("must have at most %d cards", maxCards)
-		return nil, fields
+func validate(cards []CardInput, enabled []int64) ([]dbgen.InsertDashboardCardParams, error) {
+	fields := httpx.FieldErrors{Message: "invalid dashboard"}
+	switch {
+	case len(cards) == 0:
+		fields.Add("cards", httpx.CodeRequired)
+		return nil, fields.Err()
+	case len(cards) > maxCards:
+		fields.Add("cards", httpx.CodeTooLong)
+		return nil, fields.Err()
 	}
 	rows := make([]dbgen.InsertDashboardCardParams, len(cards))
 	type key struct {
 		cardType    string
 		parameterID int64
 	}
-	seen := map[key]int{}
+	seen := map[key]bool{}
 	for i, c := range cards {
 		field := func(name string) string { return fmt.Sprintf("cards.%d.%s", i, name) }
 		row := dbgen.InsertDashboardCardParams{CardType: c.CardType, ParameterID: c.ParameterID, Size: c.Size}
@@ -282,24 +272,24 @@ func validate(cards []CardInput, enabled []int64) ([]dbgen.InsertDashboardCardPa
 		kind, known := lookupType(c.CardType)
 		switch {
 		case c.CardType == "":
-			fields[field("card_type")] = "is required"
+			fields.Add(field("card_type"), httpx.CodeRequired)
 		case !known:
-			fields[field("card_type")] = "must be one of " + typeNames()
+			fields.Add(field("card_type"), httpx.CodeInvalid)
 		case kind.parameter && c.ParameterID == nil:
-			fields[field("parameter_id")] = "is required for this card type"
+			fields.Add(field("parameter_id"), httpx.CodeRequired)
 		case kind.parameter && !slices.Contains(enabled, *c.ParameterID):
-			fields[field("parameter_id")] = "must be a parameter enabled on this tank"
+			fields.Add(field("parameter_id"), httpx.CodeInvalid)
 		case !kind.parameter && c.ParameterID != nil:
-			fields[field("parameter_id")] = "must be empty for this card type"
+			fields.Add(field("parameter_id"), httpx.CodeInvalid)
 		default:
 			k := key{c.CardType, 0}
 			if c.ParameterID != nil {
 				k.parameterID = *c.ParameterID
 			}
-			if first, dup := seen[k]; dup {
-				fields[fmt.Sprintf("cards.%d", i)] = fmt.Sprintf("duplicates cards.%d", first)
+			if seen[k] {
+				fields.Add(fmt.Sprintf("cards.%d", i), httpx.CodeInvalid)
 			} else {
-				seen[k] = i
+				seen[k] = true
 			}
 		}
 
@@ -307,37 +297,36 @@ func validate(cards []CardInput, enabled []int64) ([]dbgen.InsertDashboardCardPa
 			row.Size = sizeNormal
 		}
 		if !slices.Contains(sizes, row.Size) {
-			fields[field("size")] = "must be one of " + strings.Join(sizes, ", ")
+			fields.Add(field("size"), httpx.CodeInvalid)
 		}
 
-		opts, err := cleanOptions(c.Options)
-		if err != nil {
-			fields[field("options")] = err.Error()
+		var code httpx.Code
+		if row.OptionsJson, code = cleanOptions(c.Options); code != "" {
+			fields.Add(field("options"), code)
 		}
-		row.OptionsJson = opts
 		rows[i] = row
 	}
-	if len(fields) > 0 {
-		return nil, fields
+	if err := fields.Err(); err != nil {
+		return nil, err
 	}
 	return rows, nil
 }
 
-// cleanOptions accepts a JSON object (or nothing) and returns it compacted, "{}" when empty.
-func cleanOptions(raw json.RawMessage) (string, error) {
+// cleanOptions accepts a JSON object (or nothing) and returns it compacted, "{}" when empty; a rejection comes back as a field error code.
+func cleanOptions(raw json.RawMessage) (string, httpx.Code) {
 	if len(raw) == 0 || string(raw) == "null" {
-		return "{}", nil
+		return "{}", ""
 	}
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
-		return "", errors.New("must be a JSON object")
+		return "", httpx.CodeInvalid
 	}
 	var buf bytes.Buffer
 	if err := json.Compact(&buf, raw); err != nil {
-		return "", errors.New("must be a JSON object")
+		return "", httpx.CodeInvalid
 	}
 	if buf.Len() > maxOptionsBytes {
-		return "", fmt.Errorf("must be at most %d bytes", maxOptionsBytes)
+		return "", httpx.CodeTooLong
 	}
-	return buf.String(), nil
+	return buf.String(), ""
 }

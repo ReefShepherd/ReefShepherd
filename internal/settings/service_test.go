@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/reefshepherd/reefshepherd/internal/config"
+	"github.com/reefshepherd/reefshepherd/internal/httpx"
 	"github.com/reefshepherd/reefshepherd/internal/units"
 )
 
@@ -37,31 +38,43 @@ func TestValuesFillsInDefaults(t *testing.T) {
 	}
 }
 
-func TestValidateNamesEveryBadField(t *testing.T) {
+// fieldCodes returns the field problems err carries, keyed by API field name.
+func fieldCodes(err error) map[string]string {
+	var f httpx.FieldErrors
+	f.AddFrom(err)
+	return httpx.Validation(f).Fields
+}
+
+func TestValidateNamesEveryBadFieldWithItsCode(t *testing.T) {
 	blank, tz, hhmm := " ", "Mars/Base", "7:5"
-	got := Changes{
+	err := Changes{
 		InstanceName: &blank, Timezone: &tz, ReminderDefaultTime: &hhmm,
 		Units: map[units.Family]units.Unit{units.Temperature: "kelvin", units.Fixed: "x", units.Volume: units.USGallon},
 	}.Validate()
-	for _, field := range []string{"instance_name", "timezone", "reminder_default_time", "units.temperature", "units.fixed"} {
-		if got[field] == "" {
-			t.Errorf("no message for %s: %v", field, got)
+	want := map[string]string{
+		"instance_name": "required", "timezone": "invalid", "reminder_default_time": "invalid",
+		"units.temperature": "invalid", "units.fixed": "invalid",
+	}
+	got := fieldCodes(err)
+	if len(got) != len(want) {
+		t.Fatalf("codes = %v, want %v", got, want)
+	}
+	for field, code := range want {
+		if got[field] != code {
+			t.Errorf("codes = %v, want %v", got, want)
 		}
 	}
-	if _, bad := got["units.volume"]; bad || len(got) != 5 {
-		t.Errorf("messages = %v", got)
-	}
-	if len(Changes{}.Validate()) != 0 {
-		t.Error("an empty change set is valid")
+	if err := (Changes{}).Validate(); err != nil {
+		t.Errorf("an empty change set is valid, got %v", err)
 	}
 }
 
 func TestApplyWritesNothingWhenAnyFieldIsInvalid(t *testing.T) {
 	s, d := newStore(t)
 	name, tz := "Fine", "Mars/Base"
-	rejected, err := s.Apply(t.Context(), Changes{InstanceName: &name, Timezone: &tz})
-	if err != nil || rejected["timezone"] == "" {
-		t.Fatalf("rejected=%v err=%v", rejected, err)
+	err := s.Apply(t.Context(), Changes{InstanceName: &name, Timezone: &tz})
+	if got := fieldCodes(err); len(got) != 1 || got["timezone"] != "invalid" {
+		t.Fatalf("err=%v, want only timezone: invalid", err)
 	}
 	if _, ok := storedValue(t, d, "instance_name"); ok {
 		t.Error("the valid field was written next to an invalid one")
@@ -69,9 +82,8 @@ func TestApplyWritesNothingWhenAnyFieldIsInvalid(t *testing.T) {
 
 	tz = "Europe/Berlin"
 	hhmm := "06:45"
-	rejected, err = s.Apply(t.Context(), Changes{InstanceName: &name, Timezone: &tz, ReminderDefaultTime: &hhmm, Units: map[units.Family]units.Unit{units.Phosphate: units.PPB}})
-	if err != nil || rejected == nil || len(rejected) != 0 {
-		t.Fatalf("rejected=%v err=%v; want a non-nil empty map", rejected, err)
+	if err := s.Apply(t.Context(), Changes{InstanceName: &name, Timezone: &tz, ReminderDefaultTime: &hhmm, Units: map[units.Family]units.Unit{units.Phosphate: units.PPB}}); err != nil {
+		t.Fatal(err)
 	}
 	v, _ := s.Values(t.Context())
 	if v.InstanceName != "Fine" || v.Timezone != tz || v.ReminderDefaultTime != hhmm || v.Units[units.Phosphate] != units.PPB {
@@ -90,15 +102,15 @@ func TestSwitchAuthMode(t *testing.T) {
 	}
 
 	// Nobody to act as, nobody who can sign in.
-	if err := s.SwitchAuthMode(ctx, config.AuthModeDisabled); !errors.Is(err, ErrInvalid) {
-		t.Errorf("disable with no admin: %v", err)
+	refused := func(name string, err error) {
+		t.Helper()
+		if got := fieldCodes(err); !errors.Is(err, ErrInvalid) || len(got) != 1 || got["auth_mode"] != "invalid" {
+			t.Errorf("%s: %v, want an ErrInvalid for auth_mode with code invalid", name, err)
+		}
 	}
-	if err := s.SwitchAuthMode(ctx, config.AuthModePassword); !errors.Is(err, ErrInvalid) {
-		t.Errorf("enable with no admin: %v", err)
-	}
-	if err := s.SwitchAuthMode(ctx, "oidc"); !errors.Is(err, ErrInvalid) {
-		t.Errorf("unknown mode: %v", err)
-	}
+	refused("disable with no admin", s.SwitchAuthMode(ctx, config.AuthModeDisabled))
+	refused("enable with no admin", s.SwitchAuthMode(ctx, config.AuthModePassword))
+	refused("unknown mode", s.SwitchAuthMode(ctx, "oidc"))
 
 	exec(`INSERT INTO users (id, username, role, disabled) VALUES (1, 'off', 'admin', 1)`)
 	exec(`INSERT INTO users (id, username, role) VALUES (2, 'member', 'member')`)
@@ -124,9 +136,7 @@ func TestSwitchAuthMode(t *testing.T) {
 	}
 	exec(`UPDATE users SET password_hash = NULL WHERE id = 4`)
 	exec(`UPDATE users SET password_hash = 'x', disabled = 1 WHERE id = 3`)
-	if err := s.SwitchAuthMode(ctx, config.AuthModePassword); !errors.Is(err, ErrInvalid) {
-		t.Errorf("only a disabled admin has a password: %v", err)
-	}
+	refused("only a disabled admin has a password", s.SwitchAuthMode(ctx, config.AuthModePassword))
 }
 
 func TestWithTxCommitsAndRollsBackTogether(t *testing.T) {

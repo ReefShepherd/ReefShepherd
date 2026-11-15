@@ -1,6 +1,7 @@
 package users
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/reefshepherd/reefshepherd/internal/auth"
@@ -10,13 +11,13 @@ import (
 // PublicRoutes registers the endpoints that work before anyone is signed in.
 func PublicRoutes(mux *http.ServeMux, deps Deps) {
 	svc := NewService(deps)
-	mux.Handle("POST /api/v1/setup", httpx.Handle(svc.Logger, svc.setup))
+	mux.Handle("POST /api/v1/setup", httpx.Handle(svc.Logger, svc.setup, apiError))
 }
 
 // Routes registers the user endpoints; the caller wraps mux in the sign-in check, and the user management routes also require an admin.
 func Routes(mux *http.ServeMux, deps Deps) {
 	svc := NewService(deps)
-	handle := func(h httpx.HandlerFunc) http.Handler { return httpx.Handle(svc.Logger, h) }
+	handle := func(h httpx.HandlerFunc) http.Handler { return httpx.Handle(svc.Logger, h, apiError) }
 	admin := func(h httpx.HandlerFunc) http.Handler { return auth.RequireAdmin(handle(h)) }
 
 	mux.Handle("GET /api/v1/me", handle(svc.getMe))
@@ -26,6 +27,19 @@ func Routes(mux *http.ServeMux, deps Deps) {
 	mux.Handle("PATCH /api/v1/users/{id}", admin(svc.patchUser))
 	mux.Handle("DELETE /api/v1/users/{id}", admin(svc.deleteUser))
 	mux.Handle("POST /api/v1/users/{id}/reset-mfa", admin(svc.resetMFA))
+}
+
+// apiError gives the package's refusals their HTTP form.
+func apiError(err error) error {
+	if errors.Is(err, errUserNotFound) {
+		return httpx.NotFound(errUserNotFound.Error())
+	}
+	for _, conflict := range []error{errLastAdmin, errDisableSelf, errDeleteSelf, errSetupDone} {
+		if errors.Is(err, conflict) {
+			return httpx.Conflict(conflict.Error())
+		}
+	}
+	return err
 }
 
 func pathUserID(r *http.Request) (int64, error) {

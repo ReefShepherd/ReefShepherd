@@ -2,6 +2,7 @@ package auth_test
 
 import (
 	"crypto/sha256"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -99,6 +100,15 @@ func (r *resp) decode(v any) {
 func (r *resp) expect(status int, code string) {
 	r.t.Helper()
 	testutil.ExpectError(r.t, r.ResponseRecorder, status, code)
+}
+
+// expectFields expects a 422 validation error with exactly the given field to code pairs.
+func (r *resp) expectFields(want map[string]string) {
+	r.t.Helper()
+	b := testutil.ExpectError(r.t, r.ResponseRecorder, http.StatusUnprocessableEntity, "validation")
+	if !maps.Equal(b.Error.Fields, want) {
+		r.t.Errorf("fields = %v, want %v", b.Error.Fields, want)
+	}
 }
 
 func (r *resp) sessionCookie() *http.Cookie {

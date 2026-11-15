@@ -218,9 +218,9 @@ func TestLoginValidatesTheRequest(t *testing.T) {
 	e := newEnv(t, config.Config{})
 	e.addUser("alice", goodPassword, "member")
 	c := e.client()
-	c.do(http.MethodPost, "/api/v1/auth/login", map[string]string{"username": "alice"}).expect(http.StatusUnprocessableEntity, "validation")
-	c.do(http.MethodPost, "/api/v1/auth/login", map[string]string{"password": "x"}).expect(http.StatusUnprocessableEntity, "validation")
-	c.do(http.MethodPost, "/api/v1/auth/login", map[string]string{"username": "alice", "password": "x", "extra": "y"}).expect(http.StatusUnprocessableEntity, "validation")
+	c.do(http.MethodPost, "/api/v1/auth/login", map[string]string{"username": "alice"}).expectFields(map[string]string{"password": "required"})
+	c.do(http.MethodPost, "/api/v1/auth/login", map[string]string{"password": "x"}).expectFields(map[string]string{"username": "required"})
+	c.do(http.MethodPost, "/api/v1/auth/login", map[string]string{"username": "alice", "password": "x", "extra": "y"}).expectFields(map[string]string{"extra": "invalid"})
 	c.do(http.MethodPost, "/api/v1/auth/login", nil).expect(http.StatusUnsupportedMediaType, "unsupported_media_type")
 }
 

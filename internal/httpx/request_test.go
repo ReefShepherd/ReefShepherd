@@ -24,8 +24,8 @@ func TestIncludeArchived(t *testing.T) {
 		got, err := IncludeArchived(httptest.NewRequest(http.MethodGet, target, nil))
 		var apiErr *APIError
 		switch {
-		case tc.bad && (!errors.As(err, &apiErr) || apiErr.Status != http.StatusUnprocessableEntity || apiErr.Fields["include_archived"] == ""):
-			t.Errorf("IncludeArchived(%q) error = %v, want a 422 on include_archived", target, err)
+		case tc.bad && (!errors.As(err, &apiErr) || apiErr.Status != http.StatusUnprocessableEntity || apiErr.Fields["include_archived"] != string(CodeInvalid)):
+			t.Errorf("IncludeArchived(%q) error = %v, want a 422 with code invalid on include_archived", target, err)
 		case !tc.bad && (err != nil || got != tc.want):
 			t.Errorf("IncludeArchived(%q) = %v, %v; want %v", target, got, err, tc.want)
 		}

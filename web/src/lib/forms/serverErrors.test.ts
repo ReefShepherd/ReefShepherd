@@ -44,6 +44,7 @@ describe('fieldMessage', () => {
     expect(fieldMessage('volume', 'out_of_range')).toBe(m.form_err_volume());
     expect(fieldMessage('range', 'out_of_range')).toBe(m.params_range_order());
     expect(fieldMessage('measured_at', 'invalid')).toBe(m.tests_time_invalid());
+    expect(fieldMessage('measured_at', 'out_of_range')).toBe(m.tests_time_invalid());
     expect(fieldMessage('value_missing', 'required')).toBe(m.tests_value_needed());
     expect(fieldMessage('value', 'required')).toBe(m.form_err_required());
     expect(fieldMessage('parameter_id', 'invalid')).toBe(m.form_err_parameter());

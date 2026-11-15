@@ -1,11 +1,20 @@
 package dashboard
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
 	"github.com/reefshepherd/reefshepherd/internal/tanks"
 )
+
+// apiError gives the missing tank its HTTP form.
+func apiError(err error) error {
+	if errors.Is(err, tanks.ErrNotFound) {
+		return httpx.NotFound(tanks.ErrNotFound.Error())
+	}
+	return err
+}
 
 // target returns the signed-in user and the tank named in the path.
 func target(r *http.Request) (userID, tankID int64, err error) {

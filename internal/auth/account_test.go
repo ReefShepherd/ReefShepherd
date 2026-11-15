@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/reefshepherd/reefshepherd/internal/auth"
 	"github.com/reefshepherd/reefshepherd/internal/config"
+	"github.com/reefshepherd/reefshepherd/internal/httpx"
 	"github.com/reefshepherd/reefshepherd/internal/testutil"
 )
 
@@ -70,19 +72,12 @@ func TestPasswordChangeChecksTheCurrentPasswordWithoutLoggingOut(t *testing.T) {
 
 	r := changePassword(c, "not my password!!", newPassword)
 	// Not a 401: the web client treats 401 as "signed out" and would bounce to the login page.
-	r.expect(http.StatusUnprocessableEntity, "validation")
-	if got := r.Body.String(); !containsField(got, "current_password") {
-		t.Errorf("body = %s", got)
-	}
-	changePassword(c, "", newPassword).expect(http.StatusUnprocessableEntity, "validation")
+	r.expectFields(map[string]string{"current_password": "incorrect"})
+	changePassword(c, "", newPassword).expectFields(map[string]string{"current_password": "incorrect"})
 	if c.whoami().Code != 200 {
 		t.Error("a failed change ended the session")
 	}
 	e.client().mustLogin("alice", goodPassword)
-}
-
-func containsField(body, field string) bool {
-	return strings.Contains(body, `"fields":{"`+field+`"`)
 }
 
 func TestPasswordChangeEnforcesLengthRules(t *testing.T) {
@@ -92,15 +87,12 @@ func TestPasswordChangeEnforcesLengthRules(t *testing.T) {
 	c.mustLogin("alice", goodPassword)
 
 	short := changePassword(c, goodPassword, "sevench")
-	short.expect(http.StatusUnprocessableEntity, "validation")
-	if !containsField(short.Body.String(), "new_password") {
-		t.Errorf("body = %s", short.Body)
-	}
+	short.expectFields(map[string]string{"new_password": "too_short"})
 	long := make([]byte, 257)
 	for i := range long {
 		long[i] = 'x'
 	}
-	changePassword(c, goodPassword, string(long)).expect(http.StatusUnprocessableEntity, "validation")
+	changePassword(c, goodPassword, string(long)).expectFields(map[string]string{"new_password": "too_long"})
 	if r := changePassword(c, goodPassword, "exactly8"); r.Code != http.StatusNoContent {
 		t.Errorf("8 characters: %d %s", r.Code, r.Body)
 	}
@@ -113,7 +105,7 @@ func TestWrongCurrentPasswordIsRateLimited(t *testing.T) {
 	c := e.client()
 	c.mustLogin("alice", goodPassword)
 	for range 5 {
-		changePassword(c, "not my password!!", newPassword).expect(http.StatusUnprocessableEntity, "validation")
+		changePassword(c, "not my password!!", newPassword).expectFields(map[string]string{"current_password": "incorrect"})
 	}
 	r := changePassword(c, goodPassword, newPassword)
 	r.expect(http.StatusTooManyRequests, "too_many_requests")
@@ -136,7 +128,7 @@ func TestAccountWithoutPasswordCanSetOneWithoutCurrent(t *testing.T) {
 		t.Fatalf("set first password: %d %s", r.Code, r.Body)
 	}
 	// Once set it is required.
-	changePassword(c, "", "yet another passphrase").expect(http.StatusUnprocessableEntity, "validation")
+	changePassword(c, "", "yet another passphrase").expectFields(map[string]string{"current_password": "incorrect"})
 }
 
 func TestSessionListShowsOnlyActiveOwnSessions(t *testing.T) {
@@ -269,5 +261,22 @@ func TestCannotRevokeSomeoneElsesSession(t *testing.T) {
 	}
 	for _, bad := range []string{"abc", "0", "-3", "99999999999999999999"} {
 		alice.do(http.MethodDelete, "/api/v1/me/sessions/"+bad, nil).expect(http.StatusNotFound, "not_found")
+	}
+}
+
+func TestCheckPasswordReportsTheCodeOfTheBrokenRule(t *testing.T) {
+	cases := map[string]string{
+		"":                       "too_short",
+		"sevench":                "too_short",
+		"exactly8":               "",
+		strings.Repeat("x", 257): "too_long",
+		"bad text \xff":          "invalid",
+	}
+	for plain, want := range cases {
+		var f httpx.FieldErrors
+		auth.CheckPassword(&f, "password", plain)
+		if got := httpx.Validation(f).Fields["password"]; got != want {
+			t.Errorf("CheckPassword(%q) = %q, want %q", plain, got, want)
+		}
 	}
 }

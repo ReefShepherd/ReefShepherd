@@ -98,8 +98,8 @@ func TestConfirmRejectsAWrongCodeAndNeedsEnrolment(t *testing.T) {
 	}
 	r.decode(&out)
 	wrong := codeAt(t, out.Secret, e.now.Add(5*time.Minute))
-	c.do(http.MethodPost, "/api/v1/me/totp/confirm", map[string]string{"code": wrong}).expect(http.StatusUnprocessableEntity, "validation")
-	c.do(http.MethodPost, "/api/v1/me/totp/confirm", map[string]string{"code": "abc"}).expect(http.StatusUnprocessableEntity, "validation")
+	c.do(http.MethodPost, "/api/v1/me/totp/confirm", map[string]string{"code": wrong}).expectFields(map[string]string{"code": "incorrect"})
+	c.do(http.MethodPost, "/api/v1/me/totp/confirm", map[string]string{"code": "abc"}).expectFields(map[string]string{"code": "incorrect"})
 	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM user_totp WHERE confirmed_at IS NOT NULL`) != 0 || testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM user_recovery_codes`) != 0 {
 		t.Error("a wrong code activated two-step login or made recovery codes")
 	}
@@ -287,8 +287,8 @@ func TestMFAEndpointRequiresAPendingSessionAndOneKindOfCode(t *testing.T) {
 	signedIn.do(http.MethodPost, "/api/v1/auth/mfa", code).expect(http.StatusUnauthorized, "unauthorized")
 
 	c := loginStep1(t, e)
-	c.do(http.MethodPost, "/api/v1/auth/mfa", map[string]string{}).expect(http.StatusUnprocessableEntity, "validation")
-	c.do(http.MethodPost, "/api/v1/auth/mfa", map[string]string{"code": code["code"], "recovery_code": recovery[0]}).expect(http.StatusUnprocessableEntity, "validation")
+	c.do(http.MethodPost, "/api/v1/auth/mfa", map[string]string{}).expectFields(map[string]string{"code": "required"})
+	c.do(http.MethodPost, "/api/v1/auth/mfa", map[string]string{"code": code["code"], "recovery_code": recovery[0]}).expectFields(map[string]string{"code": "required"})
 	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM user_recovery_codes WHERE used_at IS NOT NULL`) != 0 {
 		t.Error("a rejected request spent a recovery code")
 	}
@@ -320,17 +320,11 @@ func TestDisablingTOTPNeedsThePassword(t *testing.T) {
 		"blank password": map[string]string{"password": ""},
 		"only a code":    map[string]string{"code": "123456"},
 	} {
-		r := disableTOTP(c, body)
-		r.expect(http.StatusUnprocessableEntity, "validation")
-		if !containsField(r.Body.String(), "password") {
-			t.Errorf("%s: body = %s", name, r.Body)
-		}
+		t.Run(name, func(t *testing.T) {
+			disableTOTP(c, body).expectFields(map[string]string{"password": "required"})
+		})
 	}
-	r := disableTOTP(c, map[string]string{"password": "not my password!!"})
-	r.expect(http.StatusUnprocessableEntity, "validation")
-	if !containsField(r.Body.String(), "password") {
-		t.Errorf("body = %s", r.Body)
-	}
+	disableTOTP(c, map[string]string{"password": "not my password!!"}).expectFields(map[string]string{"password": "incorrect"})
 	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM user_totp WHERE confirmed_at IS NOT NULL`) != 1 || testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM user_recovery_codes`) != 10 {
 		t.Fatal("two-step login was removed without the right password")
 	}
@@ -361,20 +355,16 @@ func TestAccountWithoutAPasswordNeedsACurrentCodeToDisableTOTP(t *testing.T) {
 	c := e.client()
 	secret, _ := c.enableTOTP()
 
-	disableTOTP(c, nil).expect(http.StatusUnprocessableEntity, "validation")
-	r := disableTOTP(c, map[string]string{"code": "000000"})
-	r.expect(http.StatusUnprocessableEntity, "validation")
-	if !containsField(r.Body.String(), "code") {
-		t.Errorf("body = %s", r.Body)
-	}
+	disableTOTP(c, nil).expectFields(map[string]string{"code": "required"})
+	disableTOTP(c, map[string]string{"code": "000000"}).expectFields(map[string]string{"code": "incorrect"})
 	// A password field means nothing for this account.
-	disableTOTP(c, map[string]string{"password": goodPassword}).expect(http.StatusUnprocessableEntity, "validation")
+	disableTOTP(c, map[string]string{"password": goodPassword}).expectFields(map[string]string{"code": "required"})
 	if testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM user_totp`) != 1 {
 		t.Fatal("removed without a valid code")
 	}
 
 	// The code that confirmed enrolment is spent; the next window's code works.
-	disableTOTP(c, map[string]string{"code": codeAt(t, secret, e.now)}).expect(http.StatusUnprocessableEntity, "validation")
+	disableTOTP(c, map[string]string{"code": codeAt(t, secret, e.now)}).expectFields(map[string]string{"code": "incorrect"})
 	e.now = e.now.Add(30 * time.Second)
 	if r := disableTOTP(c, map[string]string{"code": codeAt(t, secret, e.now)}); r.Code != http.StatusNoContent {
 		t.Fatalf("disable with a code: %d %s", r.Code, r.Body)
@@ -392,7 +382,7 @@ func TestWrongCodesWhenDisablingTOTPAreRateLimited(t *testing.T) {
 	// Move to a fresh window so the right code would otherwise be accepted.
 	e.now = e.now.Add(30 * time.Second)
 	for range 5 {
-		disableTOTP(c, map[string]string{"code": "000000"}).expect(http.StatusUnprocessableEntity, "validation")
+		disableTOTP(c, map[string]string{"code": "000000"}).expectFields(map[string]string{"code": "incorrect"})
 	}
 	disableTOTP(c, map[string]string{"code": codeAt(t, secret, e.now)}).expect(http.StatusTooManyRequests, "too_many_requests")
 }

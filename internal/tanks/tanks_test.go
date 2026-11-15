@@ -185,8 +185,8 @@ func TestUnknownPresetRejectsTheWholeCreate(t *testing.T) {
 
 	rec := e.admin(http.MethodPost, "/api/v1/tanks", map[string]any{"name": "Reef", "presets": []string{"ph", "bogus", "nitrite", "BOGUS2"}})
 	fields := testutil.ExpectError(e.t, rec, http.StatusUnprocessableEntity, "validation").Error.Fields
-	if msg := fields["presets"]; !strings.Contains(msg, "bogus") || !strings.Contains(msg, "nitrite") || !strings.Contains(msg, "BOGUS2") || strings.Contains(msg, "ph") {
-		t.Errorf("presets message = %q", msg)
+	if len(fields) != 1 || fields["presets"] != "invalid" {
+		t.Errorf("fields = %v, want only presets: invalid", fields)
 	}
 	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM tanks`); n != 0 {
 		t.Errorf("a rejected create left %d tanks", n)
@@ -269,8 +269,8 @@ func TestVolumeIsValidatedInTheDisplayUnit(t *testing.T) {
 	e := newEnv(t)
 	for _, v := range []float64{0, -5, 1e9} {
 		fields := testutil.ExpectError(e.t, e.admin(http.MethodPost, "/api/v1/tanks", map[string]any{"name": "x", "volume": v}), http.StatusUnprocessableEntity, "validation").Error.Fields
-		if fields["volume"] == "" {
-			t.Errorf("volume %v accepted: %v", v, fields)
+		if fields["volume"] != "out_of_range" {
+			t.Errorf("volume %v: fields = %v, want volume: out_of_range", v, fields)
 		}
 	}
 	// 1,000,000 liters is the limit, so the same number is fine in liters and too big in gallons.
@@ -278,7 +278,10 @@ func TestVolumeIsValidatedInTheDisplayUnit(t *testing.T) {
 	if err := e.settings.SetUnit(t.Context(), units.Volume, "us_gal"); err != nil {
 		t.Fatal(err)
 	}
-	testutil.ExpectError(e.t, e.admin(http.MethodPost, "/api/v1/tanks", map[string]any{"name": "x", "volume": 999999}), http.StatusUnprocessableEntity, "validation")
+	fields := testutil.ExpectError(e.t, e.admin(http.MethodPost, "/api/v1/tanks", map[string]any{"name": "x", "volume": 999999}), http.StatusUnprocessableEntity, "validation").Error.Fields
+	if fields["volume"] != "out_of_range" {
+		t.Errorf("fields = %v, want volume: out_of_range", fields)
+	}
 }
 
 func TestValidationReportsEveryField(t *testing.T) {
@@ -287,21 +290,25 @@ func TestValidationReportsEveryField(t *testing.T) {
 		"name": "   ", "tank_type": "pond", "volume": -1, "started_on": "2026-02-30", "note": strings.Repeat("n", 10001),
 	})
 	fields := testutil.ExpectError(e.t, rec, http.StatusUnprocessableEntity, "validation").Error.Fields
-	for _, f := range []string{"name", "tank_type", "volume", "started_on", "note"} {
-		if fields[f] == "" {
-			t.Errorf("no message for %s: %v", f, fields)
+	want := map[string]string{"name": "required", "tank_type": "invalid", "volume": "out_of_range", "started_on": "invalid", "note": "too_long"}
+	if len(fields) != len(want) {
+		t.Errorf("fields = %v, want %v", fields, want)
+	}
+	for f, code := range want {
+		if fields[f] != code {
+			t.Errorf("%s = %q, want %q (fields %v)", f, fields[f], code, fields)
 		}
 	}
-	if !strings.Contains(fields["tank_type"], "reef, fowlr, frag, quarantine, other") {
-		t.Errorf("tank_type message = %q", fields["tank_type"])
-	}
 
-	testutil.ExpectError(e.t, e.admin(http.MethodPost, "/api/v1/tanks", map[string]any{"name": strings.Repeat("é", 101)}), http.StatusUnprocessableEntity, "validation")
+	long := testutil.ExpectError(e.t, e.admin(http.MethodPost, "/api/v1/tanks", map[string]any{"name": strings.Repeat("é", 101)}), http.StatusUnprocessableEntity, "validation").Error.Fields
+	if long["name"] != "too_long" {
+		t.Errorf("101-character name: fields = %v, want name: too_long", long)
+	}
 	testutil.ExpectStatus(e.t, e.admin(http.MethodPost, "/api/v1/tanks", map[string]any{"name": strings.Repeat("é", 100)}), http.StatusCreated)
 	for _, bad := range []string{"2026-1-2", "tomorrow", "2026-13-01", "02/03/2026"} {
 		fields := testutil.ExpectError(e.t, e.admin(http.MethodPost, "/api/v1/tanks", map[string]any{"name": "x", "started_on": bad}), http.StatusUnprocessableEntity, "validation").Error.Fields
-		if fields["started_on"] == "" {
-			t.Errorf("started_on %q accepted", bad)
+		if fields["started_on"] != "invalid" {
+			t.Errorf("started_on %q: fields = %v, want started_on: invalid", bad, fields)
 		}
 	}
 	// A blank date means none.
@@ -322,9 +329,10 @@ func TestRejectedPatchChangesNothing(t *testing.T) {
 	tank := e.create(map[string]any{"name": "Keep", "volume": 60, "note": "original"})
 	rec := e.admin(http.MethodPatch, path(tank.ID, ""), map[string]any{"name": "Changed", "note": "changed", "tank_type": "pond", "volume": 0, "started_on": "nope"})
 	fields := testutil.ExpectError(e.t, rec, http.StatusUnprocessableEntity, "validation").Error.Fields
-	for _, f := range []string{"tank_type", "volume", "started_on"} {
-		if fields[f] == "" {
-			t.Errorf("no message for %s: %v", f, fields)
+	want := map[string]string{"tank_type": "invalid", "volume": "out_of_range", "started_on": "invalid"}
+	for f, code := range want {
+		if fields[f] != code {
+			t.Errorf("%s = %q, want %q (fields %v)", f, fields[f], code, fields)
 		}
 	}
 	if fields["name"] != "" || fields["note"] != "" {
@@ -336,6 +344,11 @@ func TestRejectedPatchChangesNothing(t *testing.T) {
 	}
 	testutil.ExpectError(e.t, e.admin(http.MethodPatch, path(tank.ID, ""), map[string]any{"name": ""}), http.StatusUnprocessableEntity, "validation")
 	testutil.ExpectError(e.t, e.admin(http.MethodPatch, path(tank.ID, ""), map[string]any{"sort_order": "first"}), http.StatusUnprocessableEntity, "validation")
+	// A clearable field of the wrong type is reported under its own name.
+	wrong := testutil.ExpectError(e.t, e.admin(http.MethodPatch, path(tank.ID, ""), map[string]any{"volume": "big", "started_on": 5}), http.StatusUnprocessableEntity, "validation").Error.Fields
+	if len(wrong) != 2 || wrong["volume"] != "invalid" || wrong["started_on"] != "invalid" {
+		t.Errorf("wrong-typed nullable fields = %v, want volume and started_on: invalid", wrong)
+	}
 	testutil.ExpectError(e.t, e.admin(http.MethodPatch, path(tank.ID, ""), map[string]any{"mystery": 1}), http.StatusUnprocessableEntity, "validation")
 }
 
@@ -345,12 +358,12 @@ func TestPatchRejectsNullForFieldsThatCannotBeCleared(t *testing.T) {
 	for _, field := range []string{"name", "tank_type", "note", "sort_order"} {
 		rec := e.admin(http.MethodPatch, path(tank.ID, ""), map[string]any{field: nil})
 		fields := testutil.ExpectError(e.t, rec, http.StatusUnprocessableEntity, "validation").Error.Fields
-		if fields[field] != "must not be null" || len(fields) != 1 {
+		if fields[field] != "required" || len(fields) != 1 {
 			t.Errorf("null %s: fields = %v", field, fields)
 		}
 	}
 	rec := e.admin(http.MethodPatch, path(tank.ID, ""), map[string]any{"name": nil, "note": nil, "tank_type": "reef"})
-	if fields := testutil.ExpectError(e.t, rec, http.StatusUnprocessableEntity, "validation").Error.Fields; len(fields) != 2 || fields["name"] == "" || fields["note"] == "" {
+	if fields := testutil.ExpectError(e.t, rec, http.StatusUnprocessableEntity, "validation").Error.Fields; len(fields) != 2 || fields["name"] != "required" || fields["note"] != "required" {
 		t.Errorf("two nulls: fields = %v", fields)
 	}
 	got := testutil.Decode[Tank](t, e.admin(http.MethodGet, path(tank.ID, ""), nil))
@@ -429,8 +442,8 @@ func TestDeleteNeedsTheTankNameAndCascades(t *testing.T) {
 	}
 	for _, q := range []string{"", "?confirm=", "?confirm=reef", "?confirm=" + url.QueryEscape(name+" "), "?confirm=" + url.QueryEscape(strings.ToLower(name)), "?confirm=Keep"} {
 		fields := testutil.ExpectError(e.t, del(asAdmin, tank.ID, q), http.StatusUnprocessableEntity, "validation").Error.Fields
-		if fields["confirm"] == "" {
-			t.Errorf("%q: no confirm message: %v", q, fields)
+		if fields["confirm"] != "incorrect" {
+			t.Errorf("%q: fields = %v, want confirm: incorrect", q, fields)
 		}
 	}
 	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM tanks WHERE id = ?`, tank.ID); n != 1 {

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,7 +101,7 @@ func TestEntryIsCheckedInsideTheWriteTransaction(t *testing.T) {
 		code         string
 		field        string
 	}{
-		{"parameter archived while the entry waits for the writer", `UPDATE parameter_definitions SET archived_at = '2026-10-24T11:59:00Z' WHERE preset_key = 'ph'`, http.StatusUnprocessableEntity, "validation", "results.0.parameter_id"},
+		{"parameter archived while the entry waits for the writer", `UPDATE parameter_definitions SET archived_at = '2026-10-24T11:59:00Z' WHERE preset_key = 'ph'`, http.StatusUnprocessableEntity, "validation", "results.0.parameter_id=invalid"},
 		{"tank deleted while the entry waits for the writer", `DELETE FROM tanks`, http.StatusNotFound, "not_found", ""},
 	}
 	for _, tc := range cases {
@@ -133,7 +134,8 @@ func TestEntryIsCheckedInsideTheWriteTransaction(t *testing.T) {
 			r := <-done
 			var b testutil.ErrorBody
 			_ = json.Unmarshal(r.Body.Bytes(), &b)
-			if r.Code != tc.status || b.Error.Code != tc.code || (tc.field != "" && b.Error.Fields[tc.field] == "") {
+			field, code, _ := strings.Cut(tc.field, "=")
+			if r.Code != tc.status || b.Error.Code != tc.code || b.Error.Fields[field] != code {
 				t.Errorf("status=%d code=%q fields=%v, want %d %q %s; body=%s", r.Code, b.Error.Code, b.Error.Fields, tc.status, tc.code, tc.field, r.Body)
 			}
 			if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM test_results`); n != 0 {
@@ -156,23 +158,23 @@ func TestEntryValidationReportsEveryProblemAndStoresNothing(t *testing.T) {
 		body   map[string]any
 		fields []string
 	}{
-		{"no results key", map[string]any{"measured_at": "2026-10-24T09:00:00Z"}, []string{"results"}},
-		{"empty list", map[string]any{"results": []entry{}}, []string{"results"}},
-		{"too many", map[string]any{"results": tooMany(ph)}, []string{"results"}},
-		{"unknown parameter", map[string]any{"results": []entry{val(9999, 1)}}, []string{"results.0.parameter_id"}},
-		{"archived parameter", map[string]any{"results": []entry{val(archived, 1)}}, []string{"results.0.parameter_id"}},
-		{"listed twice", map[string]any{"results": []entry{val(ph, 8), val(ph, 8.1)}}, []string{"results.1.parameter_id"}},
-		{"missing value", map[string]any{"results": []map[string]any{{"parameter_id": ph}}}, []string{"results.0.value"}},
-		{"negative alkalinity", map[string]any{"results": []entry{val(alk, -1)}}, []string{"results.0.value"}},
-		{"long note", map[string]any{"results": []entry{{ParameterID: ph, Value: ptr(8.1), Note: repeat("n", 2001)}}}, []string{"results.0.note"}},
-		{"time without an offset", map[string]any{"measured_at": "2026-10-24 09:00", "results": []entry{val(ph, 8)}}, []string{"measured_at"}},
-		{"time a week ahead", map[string]any{"measured_at": "2026-10-31T12:00:00Z", "results": []entry{val(ph, 8)}}, []string{"measured_at"}},
-		{"value of the wrong type", map[string]any{"results": []map[string]any{{"parameter_id": ph, "value": "8.1"}}}, []string{"results.0.value"}},
-		{"unknown entry field", map[string]any{"results": []map[string]any{{"parameter_id": ph, "value": 8, "unit": "x"}}}, []string{"unit"}},
+		{"no results key", map[string]any{"measured_at": "2026-10-24T09:00:00Z"}, []string{"results=required"}},
+		{"empty list", map[string]any{"results": []entry{}}, []string{"results=required"}},
+		{"too many", map[string]any{"results": tooMany(ph)}, []string{"results=too_long"}},
+		{"unknown parameter", map[string]any{"results": []entry{val(9999, 1)}}, []string{"results.0.parameter_id=invalid"}},
+		{"archived parameter", map[string]any{"results": []entry{val(archived, 1)}}, []string{"results.0.parameter_id=invalid"}},
+		{"listed twice", map[string]any{"results": []entry{val(ph, 8), val(ph, 8.1)}}, []string{"results.1.parameter_id=invalid"}},
+		{"missing value", map[string]any{"results": []map[string]any{{"parameter_id": ph}}}, []string{"results.0.value=required"}},
+		{"negative alkalinity", map[string]any{"results": []entry{val(alk, -1)}}, []string{"results.0.value=out_of_range"}},
+		{"long note", map[string]any{"results": []entry{{ParameterID: ph, Value: ptr(8.1), Note: repeat("n", 2001)}}}, []string{"results.0.note=too_long"}},
+		{"time without an offset", map[string]any{"measured_at": "2026-10-24 09:00", "results": []entry{val(ph, 8)}}, []string{"measured_at=invalid"}},
+		{"time a week ahead", map[string]any{"measured_at": "2026-10-31T12:00:00Z", "results": []entry{val(ph, 8)}}, []string{"measured_at=out_of_range"}},
+		{"value of the wrong type", map[string]any{"results": []map[string]any{{"parameter_id": ph, "value": "8.1"}}}, []string{"results.0.value=invalid"}},
+		{"unknown entry field", map[string]any{"results": []map[string]any{{"parameter_id": ph, "value": 8, "unit": "x"}}}, []string{"unit=invalid"}},
 		{"several at once", map[string]any{
 			"measured_at": "yesterday",
 			"results":     []entry{val(ph, 8.1), val(9999, 1), val(alk, -2), val(nitrate, 5), {ParameterID: nitrate}},
-		}, []string{"measured_at", "results.1.parameter_id", "results.2.value", "results.4.parameter_id", "results.4.value"}},
+		}, []string{"measured_at=invalid", "results.1.parameter_id=invalid", "results.2.value=out_of_range", "results.4.parameter_id=invalid", "results.4.value=required"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -219,7 +221,7 @@ func TestOnResultCreatedRunsAfterCommitForEachResult(t *testing.T) {
 	}
 
 	// A rejected entry never reaches the hook.
-	e.invalid(http.MethodPost, tankPath(tank, "/results"), map[string]any{"results": []entry{val(ph, 8), val(9999, 1)}}, "results.1.parameter_id")
+	e.invalid(http.MethodPost, tankPath(tank, "/results"), map[string]any{"results": []entry{val(ph, 8), val(9999, 1)}}, "results.1.parameter_id=invalid")
 	if len(got) != 2 {
 		t.Errorf("hook called for a rejected entry: %d calls", len(got))
 	}
@@ -331,18 +333,18 @@ func TestResultListFilters(t *testing.T) {
 	}
 
 	path := func(q string) string { return tankPath(tank, "/results?"+q) }
-	e.invalid(http.MethodGet, path("parameter_id=abc"), nil, "parameter_id")
-	e.invalid(http.MethodGet, path("parameter_id=0"), nil, "parameter_id")
-	e.invalid(http.MethodGet, path("from=2026-10-19"), nil, "from")
-	e.invalid(http.MethodGet, path("to=soon"), nil, "to")
-	e.invalid(http.MethodGet, path("from=2026-10-22T00:00:00Z&to=2026-10-21T00:00:00Z"), nil, "from")
-	e.invalid(http.MethodGet, path("limit=0"), nil, "limit")
-	e.invalid(http.MethodGet, path("limit=201"), nil, "limit")
-	e.invalid(http.MethodGet, path("limit=ten"), nil, "limit")
-	e.invalid(http.MethodGet, path("cursor=%21%21%21"), nil, "cursor")
-	e.invalid(http.MethodGet, path("cursor=eHl6"), nil, "cursor")
-	e.invalid(http.MethodGet, path("cursor=bm90dGltZXw1"), nil, "cursor")
-	e.invalid(http.MethodGet, path("from=bad&to=worse&limit=0"), nil, "from", "to", "limit")
+	e.invalid(http.MethodGet, path("parameter_id=abc"), nil, "parameter_id=invalid")
+	e.invalid(http.MethodGet, path("parameter_id=0"), nil, "parameter_id=invalid")
+	e.invalid(http.MethodGet, path("from=2026-10-19"), nil, "from=invalid")
+	e.invalid(http.MethodGet, path("to=soon"), nil, "to=invalid")
+	e.invalid(http.MethodGet, path("from=2026-10-22T00:00:00Z&to=2026-10-21T00:00:00Z"), nil, "from=out_of_range")
+	e.invalid(http.MethodGet, path("limit=0"), nil, "limit=out_of_range")
+	e.invalid(http.MethodGet, path("limit=201"), nil, "limit=out_of_range")
+	e.invalid(http.MethodGet, path("limit=ten"), nil, "limit=out_of_range")
+	e.invalid(http.MethodGet, path("cursor=%21%21%21"), nil, "cursor=invalid")
+	e.invalid(http.MethodGet, path("cursor=eHl6"), nil, "cursor=invalid")
+	e.invalid(http.MethodGet, path("cursor=bm90dGltZXw1"), nil, "cursor=invalid")
+	e.invalid(http.MethodGet, path("from=bad&to=worse&limit=0"), nil, "from=invalid", "to=invalid", "limit=out_of_range")
 	e.fail(http.StatusNotFound, "not_found", http.MethodGet, tankPath(9999, "/results"), nil)
 }
 
@@ -369,12 +371,12 @@ func TestPatchResult(t *testing.T) {
 	}
 	e.must(http.StatusOK, http.MethodPatch, resultPath(id), map[string]any{})
 
-	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"value": -9999}, "value")
-	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"measured_at": "tomorrow"}, "measured_at")
-	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"measured_at": "2027-01-01T00:00:00Z"}, "measured_at")
-	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"note": repeat("n", 2001)}, "note")
-	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"parameter_id": 3}, "parameter_id")
-	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"value": -9999, "note": repeat("n", 2001)}, "value", "note")
+	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"value": -9999}, "value=out_of_range")
+	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"measured_at": "tomorrow"}, "measured_at=invalid")
+	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"measured_at": "2027-01-01T00:00:00Z"}, "measured_at=out_of_range")
+	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"note": repeat("n", 2001)}, "note=too_long")
+	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"parameter_id": 3}, "parameter_id=invalid")
+	e.invalid(http.MethodPatch, resultPath(id), map[string]any{"value": -9999, "note": repeat("n", 2001)}, "value=out_of_range", "note=too_long")
 	near(t, "stored °C after rejected patches", e.storedValues()[0], 28, 1e-9)
 	e.fail(http.StatusNotFound, "not_found", http.MethodPatch, resultPath(9999), map[string]any{"note": "x"})
 	e.fail(http.StatusNotFound, "not_found", http.MethodPatch, "/api/v1/results/abc", map[string]any{"note": "x"})
