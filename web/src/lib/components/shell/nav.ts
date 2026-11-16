@@ -2,12 +2,14 @@ import { tankPath } from '#lib/api/tank-id.js';
 import { m } from '#lib/paraglide/messages.js';
 import { pathMatches } from '#lib/path.js';
 
-export type NavIconName = 'dashboard' | 'tanks' | 'tests' | 'charts' | 'settings';
+export type NavIconName = 'dashboard' | 'tanks' | 'tests' | 'charts' | 'maintenance' | 'settings';
 
 export interface NavEntry {
   icon: NavIconName;
   href: string;
   label: () => string;
+  /** A shorter label for the narrow bottom bar, when the full one does not fit. */
+  shortLabel?: () => string;
   isActive: (pathname: string) => boolean;
 }
 
@@ -15,6 +17,7 @@ export interface NavEntry {
 const tankSection = (section: string) => new RegExp(`^/tanks/[^/]+/${section}(/|$)`);
 const testsPage = tankSection('tests');
 const chartsPage = tankSection('charts');
+const maintenancePage = tankSection('maintenance');
 
 /** The entries of the main navigation; tankId is the tank the tank-scoped entries open. */
 export function navEntries(tankId: number | null): NavEntry[] {
@@ -29,7 +32,11 @@ export function navEntries(tankId: number | null): NavEntry[] {
       icon: 'tanks',
       href: '/tanks',
       label: m.nav_tanks,
-      isActive: (p) => pathMatches(p, '/tanks') && !testsPage.test(p) && !chartsPage.test(p)
+      isActive: (p) =>
+        pathMatches(p, '/tanks') &&
+        !testsPage.test(p) &&
+        !chartsPage.test(p) &&
+        !maintenancePage.test(p)
     },
     {
       icon: 'tests',
@@ -42,6 +49,13 @@ export function navEntries(tankId: number | null): NavEntry[] {
       href: tankId === null ? '/tanks' : tankPath(tankId, 'charts'),
       label: m.nav_charts,
       isActive: (p) => chartsPage.test(p)
+    },
+    {
+      icon: 'maintenance',
+      href: tankId === null ? '/maintenance' : tankPath(tankId, 'maintenance'),
+      label: m.nav_maintenance,
+      shortLabel: m.nav_maintenance_short,
+      isActive: (p) => pathMatches(p, '/maintenance') || maintenancePage.test(p)
     },
     {
       icon: 'settings',

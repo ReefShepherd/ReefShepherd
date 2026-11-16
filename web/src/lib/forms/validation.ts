@@ -1,5 +1,6 @@
 import { normalizeTimeZone } from '#lib/format/timezone.js';
 import { parseDecimal } from '#lib/format/decimal.js';
+import { timeOfDayPattern } from '#lib/schedule/schedule.js';
 import type { FieldCode, FieldErrors } from './codes.js';
 
 export const passwordLimits = { min: 8, max: 256 } as const;
@@ -84,11 +85,64 @@ export function validateRecoveryCode(input: string): FieldCode | null {
   return recoveryAlphabet.test(code) ? null : 'invalid';
 }
 
+const emailPattern = /^[^\s@]+@[^\s@]+$/;
+
 /** The email is optional; a non-empty one needs text on both sides of a single at sign. */
 export function validateOptionalEmail(input: string): FieldCode | null {
   const email = input.trim();
   if (email === '') return null;
-  return /^[^\s@]+@[^\s@]+$/.test(email) ? null : 'invalid';
+  return emailPattern.test(email) ? null : 'invalid';
+}
+
+export const portRange = { min: 1, max: 65535 } as const;
+
+/** The addresses of a comma-separated list, trimmed and without the empty entries. */
+export function parseEmailList(input: string): string[] {
+  return input
+    .split(',')
+    .map((address) => address.trim())
+    .filter((address) => address !== '');
+}
+
+/** One or more email addresses separated by commas. */
+export function validateEmailList(input: string): FieldCode | null {
+  const addresses = parseEmailList(input);
+  if (addresses.length === 0) return 'required';
+  return addresses.every((address) => emailPattern.test(address)) ? null : 'invalid';
+}
+
+/** A web address with the http or https scheme and a host. */
+export function validateHttpUrl(input: string): FieldCode | null {
+  const text = input.trim();
+  if (text === '') return 'required';
+  try {
+    const url = new URL(text);
+    return (url.protocol === 'http:' || url.protocol === 'https:') && url.hostname !== ''
+      ? null
+      : 'invalid';
+  } catch {
+    return 'invalid';
+  }
+}
+
+/** A time of day on a 24-hour clock as HH:MM, the way a time input gives it. */
+export function validateTime(input: string): FieldCode | null {
+  const text = input.trim();
+  if (text === '') return 'required';
+  return timeOfDayPattern.test(text) ? null : 'invalid';
+}
+
+/** A whole number from min to max: invalid when it is not one, out_of_range when it is outside the bounds. */
+export function validateWholeNumber(input: string, min: number, max: number): FieldCode | null {
+  const text = input.trim();
+  if (text === '') return 'required';
+  if (!/^-?\d+$/.test(text)) return 'invalid';
+  const value = Number(text);
+  return value < min || value > max ? 'out_of_range' : null;
+}
+
+export function validatePort(input: string): FieldCode | null {
+  return validateWholeNumber(input, portRange.min, portRange.max);
 }
 
 export function validateTimeZone(input: string): FieldCode | null {

@@ -16,6 +16,7 @@
     "format": "prettier --write .",
     "check": "npm run i18n && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "test": "npm run i18n && vitest run",
+    "size:initial": "node scripts/initial-js-size.mjs",
     "test:e2e": "playwright test"
   },
   "devDependencies": {

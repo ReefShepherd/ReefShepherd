@@ -13,7 +13,12 @@
   import { hasErrors, type FieldErrors } from '#lib/forms/codes.js';
   import { guarded, type GuardHooks } from '#lib/forms/guarded.js';
   import { fieldTexts, moveField } from '#lib/forms/serverErrors.js';
-  import { collectErrors, validateRequired, validateTimeZone } from '#lib/forms/validation.js';
+  import {
+    collectErrors,
+    validateRequired,
+    validateTime,
+    validateTimeZone
+  } from '#lib/forms/validation.js';
   import { m } from '#lib/paraglide/messages.js';
   import { session } from '#lib/session/session.svelte.js';
   import {
@@ -65,7 +70,7 @@
     busy: (b) => (busy = b),
     // The confirmation password is the server's `password`; it reads as the current password here.
     fields: (f) => (errors = moveField(f, 'password', 'current_password')),
-    shown: ['instance_name', 'timezone', 'auth_mode', 'password'],
+    shown: ['instance_name', 'timezone', 'reminder_default_time', 'auth_mode', 'password'],
     form: () => form
   };
 
@@ -77,6 +82,7 @@
     errors = collectErrors({
       instance_name: validateRequired(draft.instanceName),
       timezone: validateTimeZone(draft.timeZone),
+      reminder_default_time: validateTime(draft.reminderTime),
       current_password: loginOff ? validateRequired(draft.password) : null
     });
     if (hasErrors(errors)) return focusFirstInvalid(form);
@@ -132,6 +138,13 @@
         hint={lockedBy('timezone')
           ? m.instance_env_locked({ variable: lockedBy('timezone') ?? '' })
           : m.instance_timezone_hint()}
+      />
+      <TextField
+        label={m.instance_reminder_time()}
+        type="time"
+        bind:value={draft.reminderTime}
+        error={texts.reminder_default_time}
+        hint={m.instance_reminder_time_hint()}
       />
     </section>
 

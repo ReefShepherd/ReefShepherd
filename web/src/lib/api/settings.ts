@@ -4,6 +4,11 @@ export interface InstanceSettings {
   instance_name: string;
   timezone: string;
   reminder_default_time: string;
+  backup_enabled: boolean;
+  /** Local time of day as HH:mm. */
+  backup_time: string;
+  /** How many scheduled backups are kept. */
+  backup_keep: number;
   units: Record<string, string>;
   /** The login mode in force, which a server environment variable may decide. */
   auth_mode: string;
@@ -26,6 +31,10 @@ export interface UnitFamily {
 export interface SettingsPatch {
   instance_name?: string;
   timezone?: string;
+  reminder_default_time?: string;
+  backup_enabled?: boolean;
+  backup_time?: string;
+  backup_keep?: number;
   units?: Record<string, string>;
   auth_mode?: string;
   /** The admin's own password, needed to turn login off. */

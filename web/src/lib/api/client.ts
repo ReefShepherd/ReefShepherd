@@ -1,7 +1,8 @@
 import { loginUrl } from '#lib/auth/next.js';
 import { pathMatches } from '#lib/path.js';
 
-const base = '/api/v1';
+/** The path every API request starts with. */
+export const apiBase = '/api/v1';
 
 /** Per-field validation messages keyed by field name, as sent by the server. */
 export type FieldErrors = Record<string, string>;
@@ -93,8 +94,8 @@ function buildUrl(path: string, query?: RequestOptions['query']): string {
     if (value !== null && value !== undefined) params.set(key, String(value));
   }
   const qs = params.toString();
-  if (!qs) return base + path;
-  return `${base}${path}${path.includes('?') ? '&' : '?'}${qs}`;
+  if (!qs) return apiBase + path;
+  return `${apiBase}${path}${path.includes('?') ? '&' : '?'}${qs}`;
 }
 
 // Retry-After may also be an HTTP date; only the delay-seconds form is used.

@@ -6,6 +6,8 @@
   "nav_tanks": "Tanks",
   "nav_tests": "Log tests",
   "nav_charts": "Charts",
+  "nav_maintenance": "Maintenance",
+  "nav_maintenance_short": "Tasks",
   "nav_settings": "Settings",
   "theme_label": "Theme",
   "theme_light": "Light",

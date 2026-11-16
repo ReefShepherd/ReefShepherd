@@ -6,7 +6,13 @@ import {
   validateMaxLength,
   validateName,
   validateOptionalNumber,
+  parseEmailList,
   validateDisplayName,
+  validateEmailList,
+  validateHttpUrl,
+  validatePort,
+  validateTime,
+  validateWholeNumber,
   validateNewPassword,
   validateOptionalEmail,
   validatePasswordMatch,
@@ -169,5 +175,91 @@ describe('collectErrors', () => {
       b: 'required',
       c: 'invalid'
     });
+  });
+});
+
+describe('validateHttpUrl', () => {
+  it('accepts http and https addresses with a host, including local ones', () => {
+    expect(validateHttpUrl('https://discord.com/api/webhooks/1/abc')).toBeNull();
+    expect(validateHttpUrl(' http://192.168.1.20:8080/hook ')).toBeNull();
+    expect(validateHttpUrl('http://localhost/x')).toBeNull();
+  });
+
+  it('requires text and refuses other schemes and non-addresses', () => {
+    expect(validateHttpUrl('  ')).toBe('required');
+    expect(validateHttpUrl('ftp://example.com')).toBe('invalid');
+    expect(validateHttpUrl('javascript:alert(1)')).toBe('invalid');
+    expect(validateHttpUrl('example.com/hook')).toBe('invalid');
+    expect(validateHttpUrl('https://')).toBe('invalid');
+  });
+});
+
+describe('validateTime', () => {
+  it('accepts a 24-hour HH:MM time', () => {
+    expect(validateTime('00:00')).toBeNull();
+    expect(validateTime('09:05')).toBeNull();
+    expect(validateTime(' 23:59 ')).toBeNull();
+  });
+
+  it('requires text and refuses everything else', () => {
+    expect(validateTime('')).toBe('required');
+    expect(validateTime('24:00')).toBe('invalid');
+    expect(validateTime('9:00')).toBe('invalid');
+    expect(validateTime('09:60')).toBe('invalid');
+    expect(validateTime('09:00:30')).toBe('invalid');
+    expect(validateTime('noon')).toBe('invalid');
+  });
+});
+
+describe('validateWholeNumber', () => {
+  it('accepts a whole number within the bounds, ends included', () => {
+    expect(validateWholeNumber('1', 1, 365)).toBeNull();
+    expect(validateWholeNumber(' 365 ', 1, 365)).toBeNull();
+  });
+
+  it('separates a missing value, a non-number and a number outside the bounds', () => {
+    expect(validateWholeNumber('', 1, 365)).toBe('required');
+    expect(validateWholeNumber('7.5', 1, 365)).toBe('invalid');
+    expect(validateWholeNumber('1e2', 1, 365)).toBe('invalid');
+    expect(validateWholeNumber('abc', 1, 365)).toBe('invalid');
+    expect(validateWholeNumber('0', 1, 365)).toBe('out_of_range');
+    expect(validateWholeNumber('366', 1, 365)).toBe('out_of_range');
+    expect(validateWholeNumber('-3', 1, 365)).toBe('out_of_range');
+  });
+});
+
+describe('validatePort', () => {
+  it('accepts 1 to 65535', () => {
+    expect(validatePort('1')).toBeNull();
+    expect(validatePort('587')).toBeNull();
+    expect(validatePort('65535')).toBeNull();
+  });
+
+  it('refuses a missing, malformed or out-of-range port', () => {
+    expect(validatePort('')).toBe('required');
+    expect(validatePort('smtp')).toBe('invalid');
+    expect(validatePort('0')).toBe('out_of_range');
+    expect(validatePort('65536')).toBe('out_of_range');
+  });
+});
+
+describe('validateEmailList', () => {
+  it('accepts one or several addresses and ignores spaces and empty entries', () => {
+    expect(validateEmailList('a@example.com')).toBeNull();
+    expect(validateEmailList(' a@example.com , b@example.org,, ')).toBeNull();
+  });
+
+  it('requires an address and refuses any malformed one', () => {
+    expect(validateEmailList('')).toBe('required');
+    expect(validateEmailList(' , ')).toBe('required');
+    expect(validateEmailList('a@example.com, nobody')).toBe('invalid');
+    expect(validateEmailList('a@example.com b@example.com')).toBe('invalid');
+  });
+
+  it('reads the list into trimmed addresses', () => {
+    expect(parseEmailList(' a@example.com , b@example.org,, ')).toEqual([
+      'a@example.com',
+      'b@example.org'
+    ]);
   });
 });

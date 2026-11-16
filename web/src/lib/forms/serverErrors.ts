@@ -79,6 +79,15 @@ define(['default_test_interval_days'], ['invalid', 'out_of_range'], (max) =>
 define(['value_missing'], ['required'], () => m.tests_value_needed());
 define(['parameter_id'], ['invalid', 'required'], () => m.form_err_parameter());
 define(['measured_at'], ['invalid', 'out_of_range'], () => m.tests_time_invalid());
+define(['config.url'], ['invalid'], () => m.form_err_url());
+define(['config.port'], ['invalid', 'out_of_range'], () => m.form_err_port());
+define(['config.to'], ['invalid'], () => m.form_err_email_list());
+define(['config.security'], ['invalid'], () => m.form_err_smtp_security());
+define(['events'], ['required'], () => m.form_err_events());
+define(['backup_time', 'reminder_default_time'], ['invalid'], () => m.form_err_time_of_day());
+define(['backup_keep'], ['invalid', 'out_of_range'], () => m.form_err_backup_keep());
+define(['done_at', 'last_done_on'], ['out_of_range'], () => m.form_err_not_future());
+define(['tank_id'], ['invalid'], () => m.form_err_tank());
 
 /** The text for a field the server or the browser refused; limit is the field's maximum length (or other bound) when the form knows it. */
 export function fieldMessage(field: string, code: FieldCode, limit?: number): string {

@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { fakeApi } from '#lib/test/fakeApi.js';
 import { createAuthApi } from './auth.js';
+import { createBackupsApi } from './backups.js';
 import { createChartsApi } from './charts.js';
 import { createDashboardApi } from './dashboard.js';
+import { createMaintenanceApi } from './maintenance.js';
+import { createNotifyApi } from './notify.js';
 import { createParamsApi } from './params.js';
 import { createSettingsApi } from './settings.js';
 import { createTanksApi } from './tanks.js';
+import { unreadCount } from './unread.js';
 import { createUsersApi } from './users.js';
 
 // Every call of every module hands the caller's abort signal to the client.
@@ -19,9 +23,14 @@ describe('abort signals', () => {
     if (/\/dashboard/.test(key)) return { cards: [] };
     if (/\/series$/.test(key)) return { points: [] };
     if (
-      /^(GET \/(tanks|users|units|parameters|me\/sessions)|POST \/tanks\/\d+\/results)$/.test(key)
+      /^(GET \/(tanks|users|units|parameters|me\/sessions|maintenance\/presets|maintenance\/tasks|notification-channels|backups)|POST \/tanks\/\d+\/results)$/.test(
+        key
+      )
     )
       return { items: [] };
+    if (/^GET \/(maintenance\/tasks\/\d+\/completions|notifications)$/.test(key))
+      return { items: [], next_cursor: null };
+    if (key === 'GET /notifications/unread-count') return { count: 0 };
     return {};
   };
 
@@ -37,6 +46,9 @@ describe('abort signals', () => {
     const settings = createSettingsApi(api);
     const tanks = createTanksApi(api);
     const params = createParamsApi(api);
+    const maintenance = createMaintenanceApi(api);
+    const notify = createNotifyApi(api);
+    const backups = createBackupsApi(api);
 
     const all: Promise<unknown>[] = [
       auth.config(signal),
@@ -83,7 +95,31 @@ describe('abort signals', () => {
       createDashboardApi(api).get(1, signal),
       createDashboardApi(api).save(1, { cards: [] }, signal),
       createDashboardApi(api).reset(1, signal),
-      createChartsApi(api).series(1, 2, null, signal)
+      createChartsApi(api).series(1, 2, null, signal),
+      maintenance.defaults(signal),
+      maintenance.presets(false, signal),
+      maintenance.createPreset({} as never, signal),
+      maintenance.updatePreset(1, {}, signal),
+      maintenance.tasks({}, signal),
+      maintenance.task(1, signal),
+      maintenance.createTask({} as never, signal),
+      maintenance.updateTask(1, {}, signal),
+      maintenance.removeTask(1, signal),
+      maintenance.complete(1, {}, signal),
+      maintenance.completions(1, {}, signal),
+      maintenance.updateCompletion(1, {}, signal),
+      maintenance.removeCompletion(1, signal),
+      notify.channels(signal),
+      notify.createChannel({} as never, signal),
+      notify.updateChannel(1, {}, signal),
+      notify.removeChannel(1, signal),
+      notify.testChannel(1, signal),
+      notify.notifications({}, signal),
+      notify.markRead({ all: true }, signal),
+      unreadCount(api, signal),
+      backups.list(signal),
+      backups.create(signal),
+      backups.remove('reefshepherd-20260101T000000Z.db', signal)
     ];
     await Promise.all(all);
 

@@ -8,6 +8,40 @@ import { fieldMessage, fieldTexts, moveField, serverErrors } from './serverError
 const rejected = (fields: Record<string, string>) =>
   new ApiError(422, 'validation', 'invalid', fields);
 
+describe('fieldMessage for the maintenance, notification and backup forms', () => {
+  it('words the channel config fields', () => {
+    expect(fieldMessage('config.url', 'invalid')).toBe(m.form_err_url());
+    expect(fieldMessage('config.port', 'out_of_range')).toBe(m.form_err_port());
+    expect(fieldMessage('config.port', 'invalid')).toBe(m.form_err_port());
+    expect(fieldMessage('config.to', 'invalid')).toBe(m.form_err_email_list());
+    expect(fieldMessage('config.security', 'invalid')).toBe(m.form_err_smtp_security());
+    expect(fieldMessage('events', 'required')).toBe(m.form_err_events());
+  });
+
+  it('words the backup and reminder time fields', () => {
+    expect(fieldMessage('backup_time', 'invalid')).toBe(m.form_err_time_of_day());
+    expect(fieldMessage('reminder_default_time', 'invalid')).toBe(m.form_err_time_of_day());
+    expect(fieldMessage('backup_keep', 'out_of_range')).toBe(m.form_err_backup_keep());
+    expect(fieldMessage('backup_keep', 'invalid')).toBe(m.form_err_backup_keep());
+  });
+
+  it('says a completion or last-done date cannot be in the future', () => {
+    expect(fieldMessage('done_at', 'out_of_range')).toBe(m.form_err_not_future());
+    expect(fieldMessage('last_done_on', 'out_of_range')).toBe(m.form_err_not_future());
+    expect(fieldMessage('done_at', 'invalid')).toBe(m.form_err_invalid());
+  });
+
+  it('asks for a tank from the list when the tank id is refused', () => {
+    expect(fieldMessage('tank_id', 'invalid')).toBe(m.form_err_tank());
+  });
+
+  it('leaves the codes without an override on the generic text', () => {
+    expect(fieldMessage('config.url', 'required')).toBe(m.form_err_required());
+    expect(fieldMessage('events', 'invalid')).toBe(m.form_err_invalid());
+    expect(fieldMessage('name', 'too_long', 100)).toBe(m.form_err_chars_max({ max: 100 }));
+  });
+});
+
 describe('fieldMessage', () => {
   it('has a message for every code on a field with no override', () => {
     const texts = fieldCodes.map((code) => fieldMessage('anything', code));

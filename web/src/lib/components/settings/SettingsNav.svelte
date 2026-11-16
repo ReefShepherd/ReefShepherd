@@ -14,6 +14,8 @@
     { href: '/settings/account', label: m.settings_nav_account, adminOnly: false },
     { href: '/settings/users', label: m.settings_nav_users, adminOnly: true },
     { href: '/settings/instance', label: m.settings_nav_instance, adminOnly: true },
+    { href: '/settings/notifications', label: m.settings_nav_notifications, adminOnly: true },
+    { href: '/settings/backups', label: m.settings_nav_backups, adminOnly: true },
     { href: '/settings/about', label: m.settings_nav_about, adminOnly: false }
   ];
 

@@ -6,11 +6,14 @@
   "plugin.inlang.messageFormat": {
     "pathPattern": [
       "./messages/{locale}/auth.json",
+      "./messages/{locale}/backups.json",
       "./messages/{locale}/charts.json",
       "./messages/{locale}/common.json",
       "./messages/{locale}/dashboard.json",
       "./messages/{locale}/errors.json",
       "./messages/{locale}/forms.json",
+      "./messages/{locale}/maintenance.json",
+      "./messages/{locale}/notifications.json",
       "./messages/{locale}/params.json",
       "./messages/{locale}/settings.json",
       "./messages/{locale}/setup.json",

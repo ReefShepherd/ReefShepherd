@@ -12,6 +12,9 @@ const original: InstanceSettings = {
   instance_name: 'Garage reef',
   timezone: 'Europe/Berlin',
   reminder_default_time: '09:00',
+  backup_enabled: true,
+  backup_time: '03:30',
+  backup_keep: 14,
   units: { temperature: 'c', salinity: 'sg', alkalinity: 'dkh' },
   auth_mode: 'password',
   env_locked: {}
@@ -39,6 +42,14 @@ describe('settingsPatch', () => {
     draft.instanceName = '  Garage reef ';
     draft.timeZone = ' Europe/Berlin ';
     expect(settingsPatch(original, draft)).toEqual({});
+  });
+
+  it('sends a changed reminder time and ignores surrounding spaces on an unchanged one', () => {
+    const draft = draftFromSettings(original);
+    draft.reminderTime = ' 09:00 ';
+    expect(settingsPatch(original, draft)).toEqual({});
+    draft.reminderTime = '18:30';
+    expect(settingsPatch(original, draft)).toEqual({ reminder_default_time: '18:30' });
   });
 
   it('sends a changed timezone in canonical spelling', () => {

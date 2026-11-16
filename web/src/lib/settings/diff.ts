@@ -5,6 +5,7 @@ import { normalizeTimeZone } from '#lib/format/timezone.js';
 export interface InstanceDraft {
   instanceName: string;
   timeZone: string;
+  reminderTime: string;
   units: Record<string, string>;
   loginRequired: boolean;
   /** The admin's own password; needed only when this save turns login off. */
@@ -15,6 +16,7 @@ export function draftFromSettings(settings: InstanceSettings): InstanceDraft {
   return {
     instanceName: settings.instance_name,
     timeZone: settings.timezone,
+    reminderTime: settings.reminder_default_time,
     units: { ...settings.units },
     loginRequired: settings.auth_mode !== 'disabled',
     password: ''
@@ -40,6 +42,9 @@ export function settingsPatch(original: InstanceSettings, draft: InstanceDraft):
 
   const zone = normalizeTimeZone(draft.timeZone) ?? draft.timeZone.trim();
   if (zone !== original.timezone) patch.timezone = zone;
+
+  const reminder = draft.reminderTime.trim();
+  if (reminder !== original.reminder_default_time) patch.reminder_default_time = reminder;
 
   const units: Record<string, string> = {};
   for (const [family, unit] of Object.entries(draft.units)) {

@@ -22,6 +22,9 @@ export interface Schedule {
   due_time: string;
 }
 
+/** A time of day on a 24-hour clock as HH:mm. */
+export const timeOfDayPattern = /^([01]\d|2[0-3]):[0-5]\d$/;
+
 export const defaultDueTime = '09:00';
 export const everyDay = 127;
 export const maxIntervalDays = 36500;
@@ -136,7 +139,7 @@ function inRange(value: number | null, min: number, max: number): boolean {
 export function scheduleProblems(s: Schedule): ScheduleProblem[] {
   const out: ScheduleProblem[] = [];
   if (s.kind === 'none') return out;
-  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(s.due_time)) out.push('due_time');
+  if (!timeOfDayPattern.test(s.due_time)) out.push('due_time');
   switch (s.kind) {
     case 'after_last':
       if (!inRange(s.interval_days, 1, maxIntervalDays)) out.push('interval_days');

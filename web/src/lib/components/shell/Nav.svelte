@@ -14,7 +14,12 @@
       <li>
         <a href={entry.href} aria-current={entry.isActive(page.url.pathname) ? 'page' : undefined}>
           <NavIcon name={entry.icon} />
-          <span>{entry.label()}</span>
+          {#if entry.shortLabel}
+            <span class="full">{entry.label()}</span>
+            <span class="short">{entry.shortLabel()}</span>
+          {:else}
+            <span>{entry.label()}</span>
+          {/if}
         </a>
       </li>
     {/each}
@@ -51,10 +56,21 @@
     justify-content: center;
     gap: 2px;
     min-height: 3.5rem;
-    padding: var(--space-1);
+    padding: var(--space-1) 0;
     color: var(--text-muted);
-    font-size: 0.75rem;
+    font-size: 0.6875rem;
     text-decoration: none;
+  }
+
+  a span {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .full {
+    display: none;
   }
 
   a[aria-current='page'] {
@@ -63,6 +79,14 @@
   }
 
   @media (min-width: 768px) {
+    .full {
+      display: inline;
+    }
+
+    .short {
+      display: none;
+    }
+
     nav {
       top: var(--header-h);
       bottom: auto;
