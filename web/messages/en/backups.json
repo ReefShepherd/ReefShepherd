@@ -1,4 +1,27 @@
 {
   "$schema": "https://inlang.com/schema/inlang-message-format",
-  "backups_title": "Backups"
+  "backups_title": "Backups",
+  "backups_secrets_note": "A backup is a full copy of the database. It holds password hashes and notification channel secrets, so keep the files private and store a copy away from this machine too.",
+  "backups_settings_heading": "Automatic backups",
+  "backups_enabled": "Back up automatically every day",
+  "backups_time": "Backup time",
+  "backups_time_hint": "Time of day in {timezone}.",
+  "backups_keep": "Scheduled backups to keep",
+  "backups_keep_hint": "The oldest scheduled backups are deleted after each new one. Backups made before an upgrade or a restore are pruned separately, keeping the newest 5 of each.",
+  "backups_saved": "Backup settings saved.",
+  "backups_list_heading": "Saved backups",
+  "backups_now": "Back up now",
+  "backups_created": "Backup {name} created.",
+  "backups_collision": "A backup was just made. Wait a second and try again.",
+  "backups_empty": "There are no backups yet.",
+  "backups_kind_scheduled": "Scheduled",
+  "backups_kind_premigrate": "Before upgrade",
+  "backups_kind_prerestore": "Before restore",
+  "backups_download": "Download",
+  "backups_download_label": "Download {name}",
+  "backups_delete": "Delete",
+  "backups_delete_label": "Delete {name}",
+  "backups_delete_question": "Delete {name}?",
+  "backups_delete_confirm": "Delete backup",
+  "backups_deleted": "Backup {name} deleted."
 }
