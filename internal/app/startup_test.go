@@ -9,10 +9,13 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/reefshepherd/reefshepherd/internal/config"
+	"github.com/reefshepherd/reefshepherd/internal/db"
+	"github.com/reefshepherd/reefshepherd/internal/scheduler"
 )
 
 type syncBuffer struct {
@@ -166,6 +169,29 @@ func TestRunPreparesDatabaseBeforeServing(t *testing.T) {
 	}
 }
 
+// startRun starts run in a goroutine with a cancellable context and waits until it logs that it is serving.
+func startRun(t *testing.T, dataDir string, extra func(*db.DB) []scheduler.Job) (logs *syncBuffer, cancel context.CancelFunc, done chan error) {
+	t.Helper()
+	logs = &syncBuffer{}
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	done = make(chan error, 1)
+	go func() {
+		done <- run(ctx, config.Config{Listen: "127.0.0.1:0", DataDir: dataDir}, slog.New(slog.NewTextHandler(logs, nil)), extra)
+	}()
+	deadline := time.After(10 * time.Second)
+	for !strings.Contains(logs.String(), "msg=starting") {
+		select {
+		case err := <-done:
+			t.Fatalf("Run returned early: %v\n%s", err, logs.String())
+		case <-deadline:
+			t.Fatal("Run never started serving")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	return logs, cancel, done
+}
+
 func TestRunRemovesExpiredSessionsAtStartup(t *testing.T) {
 	dataDir := filepath.Join(t.TempDir(), "data")
 	logger := slog.New(slog.NewTextHandler(&syncBuffer{}, nil))
@@ -187,41 +213,82 @@ func TestRunRemovesExpiredSessionsAtStartup(t *testing.T) {
 	}
 	_ = d.Close()
 
-	logs := &syncBuffer{}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	done := make(chan error, 1)
-	go func() {
-		done <- Run(ctx, config.Config{Listen: "127.0.0.1:0", DataDir: dataDir}, slog.New(slog.NewTextHandler(logs, nil)))
-	}()
-	deadline := time.After(10 * time.Second)
-	for !strings.Contains(logs.String(), "msg=starting") {
-		select {
-		case err := <-done:
-			t.Fatalf("Run returned early: %v\n%s", err, logs.String())
-		case <-deadline:
-			t.Fatal("Run never started serving")
-		case <-time.After(5 * time.Millisecond):
-		}
-	}
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-
+	_, cancel, done := startRun(t, dataDir, nil)
 	conn, err := sql.Open("sqlite", "file:"+filepath.Join(dataDir, DBFileName)+"?mode=ro")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	var expired, live int
-	if err := conn.QueryRow(`SELECT COUNT(*) FROM sessions WHERE token_hash = x'01'`).Scan(&expired); err != nil {
+	count := func(token string) int {
+		var n int
+		if err := conn.QueryRow(`SELECT COUNT(*) FROM sessions WHERE token_hash = ` + token).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	// The cleanup is a scheduler job, so it lands on the first tick rather than before Run listens.
+	deadline := time.Now().Add(5 * time.Second)
+	for count("x'01'") != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the expired session was still there 5 s after Run started")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := count("x'02'"); n != 1 {
+		t.Errorf("live sessions left = %d, want 1", n)
+	}
+	cancel()
+	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if err := conn.QueryRow(`SELECT COUNT(*) FROM sessions WHERE token_hash = x'02'`).Scan(&live); err != nil {
+}
+
+func TestRunStopsTheSchedulerBeforeClosingTheDatabase(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "data")
+	var finished atomic.Bool
+	var queryErr atomic.Value
+	jobStarted := make(chan struct{})
+	extra := func(database *db.DB) []scheduler.Job {
+		return []scheduler.Job{{
+			Name:    "slow-shutdown",
+			Trigger: scheduler.EveryTick(),
+			Run: func(ctx context.Context, _ time.Time) error {
+				close(jobStarted)
+				<-ctx.Done()
+				// A job still using the database after the server stopped must find it open.
+				time.Sleep(100 * time.Millisecond)
+				var one int
+				if err := database.R.QueryRowContext(context.Background(), `SELECT 1`).Scan(&one); err != nil {
+					queryErr.Store(err)
+				}
+				finished.Store(true)
+				return nil
+			},
+		}}
+	}
+	_, cancel, done := startRun(t, dataDir, extra)
+	select {
+	case <-jobStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the job never started")
+	}
+	cancel()
+	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if expired != 0 || live != 1 {
-		t.Errorf("expired sessions left = %d, live sessions left = %d; want 0 and 1", expired, live)
+	if !finished.Load() {
+		t.Error("Run returned before the running job did")
+	}
+	if err, _ := queryErr.Load().(error); err != nil {
+		t.Errorf("the job found the database closed: %v", err)
+	}
+}
+
+func TestTickIntervalIsFastOnlyInDev(t *testing.T) {
+	if got := tickInterval(config.Config{}); got != time.Minute {
+		t.Errorf("production interval = %v, want 1m", got)
+	}
+	if got := tickInterval(config.Config{Dev: true}); got != 5*time.Second {
+		t.Errorf("dev interval = %v, want 5s", got)
 	}
 }

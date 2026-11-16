@@ -19,6 +19,7 @@ import (
 	"github.com/reefshepherd/reefshepherd/internal/auth"
 	"github.com/reefshepherd/reefshepherd/internal/auth/password"
 	"github.com/reefshepherd/reefshepherd/internal/config"
+	"github.com/reefshepherd/reefshepherd/internal/db"
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
 	"github.com/reefshepherd/reefshepherd/internal/settings"
 	"github.com/reefshepherd/reefshepherd/internal/testutil"
@@ -32,12 +33,15 @@ func TestRegisterRoutesWiresRealDepsIntoPackages(t *testing.T) {
 	if err := store.SetInstanceName(t.Context(), "Wired Reef"); err != nil {
 		t.Fatal(err)
 	}
+	cfg := config.Config{DataDir: "/srv/reef", PublicURL: "https://reef.example.org"}
 	authSvc := auth.NewService(auth.Deps{
 		DB: database, Settings: store, Passwords: password.NewHasher(password.Params{Time: 1, MemoryKiB: 64, Threads: 1}),
-		Config: config.Config{}, Logger: testutil.Logger(t),
+		Config: cfg, Logger: testutil.Logger(t),
 	})
+	deps := newRouteDeps(cfg, testutil.Logger(t), database, store, authSvc)
+	requireWiredFeatureDeps(t, deps, database, store)
 	mux := http.NewServeMux()
-	registerRoutes(mux, routeDeps{Config: config.Config{}, Logger: testutil.Logger(t), DB: database, Settings: store, Auth: authSvc}, webui.NewHandler(fstest.MapFS{".gitkeep": {}}, testutil.Logger(t)))
+	registerRoutes(mux, deps, webui.NewHandler(fstest.MapFS{".gitkeep": {}}, testutil.Logger(t)))
 
 	serve := func(method, target, body, cookie string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, target, strings.NewReader(body))
@@ -102,6 +106,30 @@ func TestRegisterRoutesWiresRealDepsIntoPackages(t *testing.T) {
 	}
 	if rec := serve(http.MethodGet, "/some/page", "", ""); rec.Code != http.StatusOK {
 		t.Errorf("web ui: %d", rec.Code)
+	}
+}
+
+// requireWiredFeatureDeps checks that each feature package got the shared database and settings, the paths and URLs derived from the config, and one common notification service.
+func requireWiredFeatureDeps(t *testing.T, d routeDeps, database *db.DB, store *settings.Store) {
+	t.Helper()
+	if d.Notify.DB != database || d.Notify.Settings != store || d.Notify.Logger == nil || d.Notify.PublicURL != "https://reef.example.org" {
+		t.Errorf("notify deps = %+v", d.Notify)
+	}
+	if d.Maintenance.DB != database || d.Maintenance.Settings != store || d.Maintenance.Logger == nil {
+		t.Errorf("maintenance deps = %+v", d.Maintenance)
+	}
+	if d.Backup.DB != database || d.Backup.Settings != store || d.Backup.Logger == nil || d.Backup.Dir != "/srv/reef/backups" {
+		t.Errorf("backup deps = %+v", d.Backup)
+	}
+	r := d.RemindersDeps
+	if r.DB != database || r.Settings != store || r.Logger == nil || r.Maintenance == nil || r.Params == nil || d.Reminders == nil {
+		t.Errorf("reminders deps = %+v", r)
+	}
+	if r.Notify == nil || r.Notify != d.Backup.Notify {
+		t.Errorf("reminders and backup raise through different notification services: %v and %v", r.Notify, d.Backup.Notify)
+	}
+	if r.Params != nil && r.Params.OnResultCreated != nil {
+		t.Error("the params service the reminders read from has the result hook, which would call the reminders back")
 	}
 }
 

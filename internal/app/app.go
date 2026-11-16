@@ -17,6 +17,7 @@ import (
 	"github.com/reefshepherd/reefshepherd/internal/config"
 	"github.com/reefshepherd/reefshepherd/internal/db"
 	"github.com/reefshepherd/reefshepherd/internal/httpx"
+	"github.com/reefshepherd/reefshepherd/internal/scheduler"
 	"github.com/reefshepherd/reefshepherd/internal/settings"
 	"github.com/reefshepherd/reefshepherd/internal/version"
 	"github.com/reefshepherd/reefshepherd/internal/webui"
@@ -36,6 +37,9 @@ const (
 	backupsDirName = "backups"
 	tmpDirName     = "tmp"
 
+	// devTickInterval lets a development server run its jobs within seconds, where production ticks once a minute.
+	devTickInterval = 5 * time.Second
+
 	shutdownTimeout   = 15 * time.Second
 	readHeaderTimeout = 10 * time.Second
 	idleTimeout       = 2 * time.Minute
@@ -46,7 +50,8 @@ type App struct {
 	cfg     config.Config
 	logger  *slog.Logger
 	handler http.Handler
-	auth    *auth.Service
+	// jobs are the background jobs Run hands to the scheduler; building the app starts none of them.
+	jobs []scheduler.Job
 }
 
 // New builds the route table, serving the embedded web UI, and wraps it in the middleware stack.
@@ -70,8 +75,9 @@ func newApp(cfg config.Config, logger *slog.Logger, database *db.DB, store *sett
 	}
 
 	authService := auth.NewService(auth.Deps{DB: database, Settings: store, Passwords: hasher, Config: cfg, Logger: logger})
+	deps := newRouteDeps(cfg, logger, database, store, authService)
 	mux := http.NewServeMux()
-	registerRoutes(mux, routeDeps{Config: cfg, Logger: logger, DB: database, Settings: store, Auth: authService}, ui)
+	registerRoutes(mux, deps, ui)
 
 	handler := httpx.Chain(mux,
 		httpx.RequestLog(logger),
@@ -80,7 +86,7 @@ func newApp(cfg config.Config, logger *slog.Logger, database *db.DB, store *sett
 		httpx.MaxBody(maxBodyBytes),
 		crossOrigin,
 	)
-	return &App{cfg: cfg, logger: logger, handler: handler, auth: authService}, nil
+	return &App{cfg: cfg, logger: logger, handler: handler, jobs: buildJobs(deps)}, nil
 }
 
 // Handler is the full HTTP handler including middleware.
@@ -88,8 +94,13 @@ func (a *App) Handler() http.Handler {
 	return a.handler
 }
 
-// Run prepares the data directory and database, listens on the configured address and serves until ctx is cancelled.
+// Run prepares the data directory and database, starts the scheduler, listens on the configured address and serves until ctx is cancelled.
 func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
+	return run(ctx, cfg, logger, nil)
+}
+
+// run is Run with extra, when set, adding jobs built from the opened database, which lets a test watch the shutdown order.
+func run(ctx context.Context, cfg config.Config, logger *slog.Logger, extra func(*db.DB) []scheduler.Job) error {
 	if err := os.MkdirAll(cfg.DataDir, 0o750); err != nil {
 		return fmt.Errorf("create data dir: %w", err)
 	}
@@ -106,9 +117,12 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	if err := a.auth.CleanupExpired(ctx); err != nil {
-		logger.Warn("clean up expired sessions", slog.Any("error", err))
+	if extra != nil {
+		a.jobs = append(a.jobs, extra(database)...)
 	}
+	// Deferred after the database close above, so the scheduler has stopped before the database closes.
+	stopScheduler := a.startScheduler(ctx)
+	defer stopScheduler()
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", cfg.Listen, err)
@@ -120,6 +134,29 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		slog.Bool("dev", cfg.Dev),
 	)
 	return a.Serve(ctx, ln)
+}
+
+// tickInterval is the time between scheduler ticks.
+func tickInterval(cfg config.Config) time.Duration {
+	if cfg.Dev {
+		return devTickInterval
+	}
+	return time.Minute
+}
+
+// startScheduler runs the jobs until ctx ends or the returned function is called, which waits for the running jobs to return.
+func (a *App) startScheduler(ctx context.Context) (stop func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	sched := scheduler.New(a.logger, a.jobs, scheduler.WithInterval(tickInterval(a.cfg)))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		sched.Run(ctx)
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 // openDatabase empties the tmp directory, opens the database and applies pending migrations.
