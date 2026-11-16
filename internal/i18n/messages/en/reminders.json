@@ -1,0 +1,13 @@
+{
+  "reminders_maintenance_due_title_tank": "%[1]s is due on %[2]s",
+  "reminders_maintenance_due_title_system": "%[1]s is due",
+  "reminders_maintenance_due_body": "Due %[1]s.",
+  "reminders_tests_due_title_one": "1 test due on %[1]s",
+  "reminders_tests_due_title_many": "%[1]d tests due on %[2]s",
+  "reminders_tests_due_separator": ", ",
+  "reminders_out_of_range_title": "%[1]s is out of range on %[2]s",
+  "reminders_out_of_range_body_below": "Measured %[1]s, below the ideal range of %[2]s to %[3]s.",
+  "reminders_out_of_range_body_above": "Measured %[1]s, above the ideal range of %[2]s to %[3]s.",
+  "reminders_out_of_range_body_below_min": "Measured %[1]s, below the ideal minimum of %[2]s.",
+  "reminders_out_of_range_body_above_max": "Measured %[1]s, above the ideal maximum of %[2]s."
+}

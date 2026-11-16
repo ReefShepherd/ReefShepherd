@@ -72,7 +72,7 @@ func TestMigrateCreatesSchemaAndSeeds(t *testing.T) {
 		"dashboard_cards", "maintenance_completions", "maintenance_presets", "maintenance_tasks",
 		"notification_channels", "notification_deliveries", "notification_reads", "notification_subscriptions",
 		"notifications", "parameter_definitions", "sessions", "settings", "tank_parameters",
-		"tanks", "test_results", "user_preferences", "user_recovery_codes", "user_totp", "users",
+		"tanks", "test_reminders", "test_results", "user_preferences", "user_recovery_codes", "user_totp", "users",
 	}
 	rows, err := d.R.QueryContext(t.Context(),
 		`SELECT name, strict FROM pragma_table_list WHERE schema = 'main' AND type = 'table' AND name NOT LIKE '%sqlite_%' AND name NOT LIKE 'goose_%' ORDER BY name`)
@@ -238,7 +238,7 @@ func TestMigrationTablesAreStrict(t *testing.T) {
 	d := migrated(t)
 	for _, table := range []string{
 		"maintenance_presets", "maintenance_tasks", "maintenance_completions", "notification_channels",
-		"notification_subscriptions", "notifications", "notification_reads", "notification_deliveries",
+		"notification_subscriptions", "notifications", "notification_reads", "notification_deliveries", "test_reminders",
 	} {
 		var strict int
 		err := d.R.QueryRowContext(t.Context(), `SELECT strict FROM pragma_table_list WHERE schema = 'main' AND name = ?`, table).Scan(&strict)
@@ -248,6 +248,31 @@ func TestMigrationTablesAreStrict(t *testing.T) {
 	}
 	if _, err := d.W.ExecContext(t.Context(), `INSERT INTO notification_channels (name, kind, config_json, enabled) VALUES ('c', 'ntfy', '{}', 'yes')`); err == nil {
 		t.Error("text in an integer column of a new table was accepted")
+	}
+}
+
+func TestTestRemindersAreUniquePerDueTimeAndGoWithTheTank(t *testing.T) {
+	d := migrated(t)
+	exec(t, d.W, `INSERT INTO tanks (id, name) VALUES (1, 'tank')`)
+	add := func(parameter int, due string) error {
+		_, err := d.W.ExecContext(t.Context(), `INSERT INTO test_reminders (tank_id, parameter_id, due_at) VALUES (1, ?, ?)`, parameter, due)
+		return err
+	}
+	if err := add(1, "2026-11-15T09:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if err := add(1, "2026-11-15T09:00:00Z"); err == nil {
+		t.Error("the same parameter and due time was stored twice")
+	}
+	if err := add(1, "2026-11-16T09:00:00Z"); err != nil {
+		t.Errorf("a new due time of the same parameter was refused: %v", err)
+	}
+	if err := add(2, "2026-11-15T09:00:00Z"); err != nil {
+		t.Errorf("the same due time of another parameter was refused: %v", err)
+	}
+	exec(t, d.W, `DELETE FROM tanks WHERE id = 1`)
+	if n := count(t, d.R, `SELECT COUNT(*) FROM test_reminders`); n != 0 {
+		t.Errorf("reminders left after the tank was deleted = %d", n)
 	}
 }
 
@@ -887,6 +912,7 @@ func TestTimestampDefaultsUseUTCFormat(t *testing.T) {
 	exec(t, d.W, `INSERT INTO notifications (id, event_type, title, source_kind, source_id, occurrence) VALUES (1, 'maintenance_due', 'title', 'maintenance_task', 1, 'x')`)
 	exec(t, d.W, `INSERT INTO notification_reads (notification_id, user_id) VALUES (1, 1)`)
 	exec(t, d.W, `INSERT INTO notification_deliveries (notification_id, channel_id) VALUES (1, 1)`)
+	exec(t, d.W, `INSERT INTO test_reminders (tank_id, parameter_id, due_at) VALUES (1, 1, 'x')`)
 
 	want := map[string]string{
 		"settings":              "updated_at",
@@ -908,6 +934,7 @@ func TestTimestampDefaultsUseUTCFormat(t *testing.T) {
 		"notifications":           "created_at",
 		"notification_reads":      "read_at",
 		"notification_deliveries": "created_at",
+		"test_reminders":          "created_at",
 	}
 	shape := regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$`)
 	for table, columns := range want {

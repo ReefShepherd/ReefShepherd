@@ -178,6 +178,13 @@ type TankParameter struct {
 	UpdatedAt     string
 }
 
+type TestReminder struct {
+	TankID      int64
+	ParameterID int64
+	DueAt       string
+	CreatedAt   string
+}
+
 type TestResult struct {
 	ID          int64
 	TankID      int64

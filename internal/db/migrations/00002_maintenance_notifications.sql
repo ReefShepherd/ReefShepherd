@@ -136,6 +136,16 @@ CREATE TABLE notification_deliveries (
 ) STRICT;
 CREATE INDEX notification_deliveries_pending ON notification_deliveries (status, next_attempt_at);
 
+-- Test parameters already listed in a tests-due summary, so an overdue test is listed once per due time.
+CREATE TABLE test_reminders (
+    tank_id      INTEGER NOT NULL REFERENCES tanks (id) ON DELETE CASCADE,
+    parameter_id INTEGER NOT NULL REFERENCES parameter_definitions (id) ON DELETE CASCADE,
+    -- The due time that was listed, so a parameter whose due time moves is listed again.
+    due_at       TEXT NOT NULL,
+    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    PRIMARY KEY (tank_id, parameter_id, due_at)
+) STRICT;
+
 -- Shipped task presets; every one repeats a number of days after it was last done.
 INSERT INTO maintenance_presets
     (preset_key, name, tankless, schedule_kind, interval_days, sort_order)
