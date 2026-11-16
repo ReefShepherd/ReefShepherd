@@ -66,3 +66,90 @@ export async function expectNoHorizontalScroll(page: Page): Promise<void> {
   );
   expect(overflow).toBeLessThanOrEqual(0);
 }
+
+/** The calendar date `days` days before now in the instance time zone, as YYYY-MM-DD. */
+export function daysAgo(days: number): string {
+  const at = new Date(Date.now() - days * 86_400_000);
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(at);
+}
+
+export interface CreatedTask {
+  id: number;
+  name: string;
+}
+
+/** Creates a task that repeats a number of days after it was last done; a tank of null makes it a whole-system task. */
+export async function createTask(
+  request: APIRequestContext,
+  options: {
+    name: string;
+    tankId: number | null;
+    everyDays?: number;
+    lastDoneDaysAgo?: number;
+    notify?: boolean;
+  }
+): Promise<CreatedTask> {
+  const created = await request.post('/api/v1/maintenance/tasks', {
+    data: {
+      tank_id: options.tankId,
+      name: options.name,
+      notify: options.notify ?? true,
+      schedule: {
+        kind: 'after_last',
+        interval_days: options.everyDays ?? 7,
+        weekdays: null,
+        interval_weeks: 1,
+        month_day: null,
+        anchor_date: null,
+        due_time: '09:00'
+      },
+      ...(options.lastDoneDaysAgo === undefined
+        ? {}
+        : { last_done_on: daysAgo(options.lastDoneDaysAgo) })
+    }
+  });
+  await expectOk(created);
+  return { id: (await created.json()).id as number, name: options.name };
+}
+
+export interface CreatedChannel {
+  id: number;
+  name: string;
+}
+
+/** Creates an enabled webhook channel that receives every event. */
+export async function createWebhookChannel(
+  request: APIRequestContext,
+  options: { name: string; url: string }
+): Promise<CreatedChannel> {
+  const created = await request.post('/api/v1/notification-channels', {
+    data: {
+      name: options.name,
+      kind: 'webhook',
+      config: { url: options.url },
+      events: ['maintenance_due', 'tests_due', 'out_of_range', 'backup_failed']
+    }
+  });
+  await expectOk(created);
+  return { id: (await created.json()).id as number, name: options.name };
+}
+
+/** Marks every notification read for the signed-in user. */
+export async function markAllNotificationsRead(request: APIRequestContext): Promise<void> {
+  await expectOk(await request.post('/api/v1/notifications/read', { data: { all: true } }));
+}
+
+/** Deletes every notification channel, so no earlier spec's destination receives later messages. */
+export async function deleteAllChannels(request: APIRequestContext): Promise<void> {
+  const { items } = (await (await request.get('/api/v1/notification-channels')).json()) as {
+    items: { id: number }[];
+  };
+  for (const channel of items) {
+    await expectOk(await request.delete(`/api/v1/notification-channels/${channel.id}`));
+  }
+}
