@@ -21,7 +21,7 @@ let matePage: Page;
 let tankId = 0;
 const problems: string[] = [];
 
-const defaultOrder = ['Tests due', 'pH', 'Alkalinity', 'Nitrate'];
+const defaultOrder = ['Tests due', 'Maintenance due', 'pH', 'Alkalinity', 'Nitrate'];
 
 // Pins the current tank before any page script runs, so the dashboard opens this test's tank.
 async function newContext(browser: Browser, baseURL: string) {
@@ -177,7 +177,7 @@ test('editing adds a chart card, widens a card, removes one, and the layout surv
   await page.getByRole('button', { name: 'Remove Alkalinity' }).click();
   await save(page);
 
-  const expected = ['Tests due', 'pH', 'Nitrate', 'pH'];
+  const expected = ['Tests due', 'Maintenance due', 'pH', 'Nitrate', 'pH'];
   expect(await titles(page)).toEqual(expected);
 
   await page.reload();
@@ -193,11 +193,21 @@ test('the up and down buttons reorder cards and keep focus on the pressed button
   await startEditing(page);
 
   await page.getByRole('button', { name: 'Move Nitrate up' }).click();
-  expect((await titles(page)).slice(0, 3)).toEqual(['Tests due', 'Nitrate', 'pH']);
+  expect((await titles(page)).slice(0, 4)).toEqual([
+    'Tests due',
+    'Maintenance due',
+    'Nitrate',
+    'pH'
+  ]);
   await expect(page.getByRole('button', { name: 'Move Nitrate up' })).toBeFocused();
 
   await page.getByRole('button', { name: 'Move Nitrate down' }).click();
-  expect((await titles(page)).slice(0, 3)).toEqual(['Tests due', 'pH', 'Nitrate']);
+  expect((await titles(page)).slice(0, 4)).toEqual([
+    'Tests due',
+    'Maintenance due',
+    'pH',
+    'Nitrate'
+  ]);
 
   // The first card cannot move up and the last cannot move down.
   await expect(page.getByRole('button', { name: 'Move Tests due up' })).toBeDisabled();
@@ -244,7 +254,7 @@ test('cancel discards edits and reset restores the default cards', async () => {
 test('the last card cannot be removed', async () => {
   await openDashboard(page);
   await startEditing(page);
-  for (const name of ['Alkalinity', 'Nitrate', 'pH']) {
+  for (const name of ['Alkalinity', 'Nitrate', 'pH', 'Maintenance due']) {
     await page.getByRole('button', { name: `Remove ${name}` }).click();
   }
   await expect(page.locator('.dash-slot')).toHaveCount(1);
@@ -281,7 +291,7 @@ test('two users keep independent layouts for the same tank', async () => {
   await page.getByRole('button', { name: 'Remove Alkalinity' }).click();
   await page.getByRole('button', { name: 'Remove Nitrate' }).click();
   await save(page);
-  expect(await titles(page)).toEqual(['Tests due', 'pH']);
+  expect(await titles(page)).toEqual(['Tests due', 'Maintenance due', 'pH']);
 
   // The second user still has the default cards, and their own edit does not touch the first.
   await openDashboard(matePage);
@@ -290,16 +300,16 @@ test('two users keep independent layouts for the same tank', async () => {
   await matePage.getByRole('button', { name: 'Remove Tests due' }).click();
   await matePage.getByRole('button', { name: 'Wide pH' }).click();
   await save(matePage);
-  expect(await titles(matePage)).toEqual(['pH', 'Alkalinity', 'Nitrate']);
+  expect(await titles(matePage)).toEqual(['Maintenance due', 'pH', 'Alkalinity', 'Nitrate']);
 
   await page.reload();
   await expect(page.locator('.dash-slot').first()).toBeVisible();
-  expect(await titles(page)).toEqual(['Tests due', 'pH']);
+  expect(await titles(page)).toEqual(['Tests due', 'Maintenance due', 'pH']);
   await expect(slot(page, 'pH')).not.toHaveClass(/wide/);
 
   await matePage.reload();
   await expect(matePage.locator('.dash-slot').first()).toBeVisible();
-  expect(await titles(matePage)).toEqual(['pH', 'Alkalinity', 'Nitrate']);
+  expect(await titles(matePage)).toEqual(['Maintenance due', 'pH', 'Alkalinity', 'Nitrate']);
   await expect(slot(matePage, 'pH')).toHaveClass(/wide/);
 });
 

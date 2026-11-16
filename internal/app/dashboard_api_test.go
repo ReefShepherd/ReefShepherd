@@ -65,7 +65,7 @@ func TestDashboardsBelongToTheSignedInUser(t *testing.T) {
 		testutil.DecodeInto(t, rec, &d)
 		return d
 	}
-	if d := read(admin); len(d.Cards) != 3 || d.Cards[0].CardType != "tests_due" || d.Cards[1].CardType != "parameter" || d.Cards[1].ParameterID == nil {
+	if d := read(admin); len(d.Cards) != 4 || d.Cards[0].CardType != "tests_due" || d.Cards[1].CardType != "maintenance_due" || d.Cards[2].CardType != "parameter" || d.Cards[2].ParameterID == nil {
 		t.Fatalf("default dashboard = %+v", d)
 	}
 
@@ -74,7 +74,7 @@ func TestDashboardsBelongToTheSignedInUser(t *testing.T) {
 	if d := read(admin); len(d.Cards) != 1 || d.Cards[0].Size != "wide" {
 		t.Errorf("admin dashboard = %+v", d)
 	}
-	if d := read(member); len(d.Cards) != 3 || d.Cards[0].Size != "normal" {
+	if d := read(member); len(d.Cards) != 4 || d.Cards[0].Size != "normal" {
 		t.Errorf("member dashboard = %+v", d)
 	}
 	testutil.ExpectStatus(t, member.do(http.MethodPost, base+"/reset", nil), http.StatusOK)

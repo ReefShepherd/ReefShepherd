@@ -8,9 +8,11 @@
     confirmLabel: string;
     onconfirm: () => void | Promise<void>;
     disabled?: boolean;
+    /** A longer accessible name for the first button, such as one that says what is deleted. */
+    ariaLabel?: string;
   }
 
-  let { label, question, confirmLabel, onconfirm, disabled = false }: Props = $props();
+  let { label, question, confirmLabel, onconfirm, disabled = false, ariaLabel }: Props = $props();
 
   let asking = $state(false);
   let busy = $state(false);
@@ -37,7 +39,13 @@
     </button>
   </div>
 {:else}
-  <button type="button" class="btn danger" {disabled} onclick={() => (asking = true)}>
+  <button
+    type="button"
+    class="btn danger"
+    {disabled}
+    aria-label={ariaLabel}
+    onclick={() => (asking = true)}
+  >
     {label}
   </button>
 {/if}

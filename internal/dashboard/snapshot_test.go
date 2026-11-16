@@ -93,14 +93,14 @@ func TestGetReadsCardsAndParametersFromOneSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantShape(t, layout.Cards, "tests_due:-:normal", "parameter:"+id(param)+":normal")
+	wantShape(t, layout.Cards, "tests_due:-:normal", "maintenance_due:-:normal", "parameter:"+id(param)+":normal")
 
 	// The write did commit, so the next read sees it.
 	layout, err = svc.Get(t.Context(), userA, tank)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantShape(t, layout.Cards, "tests_due:-:wide", "parameter:"+id(param)+":wide")
+	wantShape(t, layout.Cards, "tests_due:-:wide", "maintenance_due:-:wide", "parameter:"+id(param)+":wide")
 }
 
 func TestGetSeedingRechecksTheTankInsideTheWrite(t *testing.T) {

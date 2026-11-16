@@ -28,6 +28,8 @@
     /** A message from the server about the schedule as a whole. */
     error?: string;
     disabled?: boolean;
+    /** Whether the time-of-day field is offered; schedules that carry no time of their own hide it. */
+    showTime?: boolean;
   }
 
   let {
@@ -36,7 +38,8 @@
     legend,
     showErrors = false,
     error,
-    disabled = false
+    disabled = false,
+    showTime = true
   }: Props = $props();
 
   const uid = $props.id();
@@ -180,7 +183,7 @@
       </div>
     {/if}
 
-    {#if value.kind !== 'none'}
+    {#if value.kind !== 'none' && showTime}
       <div class="field">
         <label for="{uid}-time">{m.schedule_due_time()}</label>
         <input

@@ -42,7 +42,7 @@ func TestDefaultLayoutIsCreatedOnFirstRequest(t *testing.T) {
 		t.Fatalf("%d cards exist before the first request", n)
 	}
 	cards := e.get(userA, tank)
-	wantShape(t, cards, "tests_due:-:normal", "parameter:"+id(third)+":normal", "parameter:"+id(first)+":normal", "parameter:"+id(second)+":normal")
+	wantShape(t, cards, "tests_due:-:normal", "maintenance_due:-:normal", "parameter:"+id(third)+":normal", "parameter:"+id(first)+":normal", "parameter:"+id(second)+":normal")
 	for _, c := range cards {
 		if c.ID == 0 || string(c.Options) != "{}" {
 			t.Errorf("card = %+v", c)
@@ -54,14 +54,42 @@ func TestDefaultLayoutIsCreatedOnFirstRequest(t *testing.T) {
 	if !reflect.DeepEqual(cards, again) {
 		t.Errorf("second GET = %+v, want %+v", again, cards)
 	}
-	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM dashboard_cards`); n != 4 {
-		t.Errorf("%d cards stored, want 4", n)
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM dashboard_cards`); n != 5 {
+		t.Errorf("%d cards stored, want 5", n)
+	}
+}
+
+func TestMaintenanceDueCardCanBeSaved(t *testing.T) {
+	e := newEnv(t)
+	tank := e.tank("Display")
+	a := e.param("A")
+	e.enable(tank, a, true, 0)
+	got := e.put(userA, tank, []map[string]any{{"card_type": "maintenance_due", "size": "wide"}, {"card_type": "parameter", "parameter_id": a}})
+	wantShape(t, got, "maintenance_due:-:wide", "parameter:"+id(a)+":normal")
+	if !reflect.DeepEqual(e.get(userA, tank), got) {
+		t.Error("GET after PUT differs from the PUT response")
+	}
+}
+
+func TestSavedLayoutsAreLeftWithoutTheMaintenanceCard(t *testing.T) {
+	e := newEnv(t)
+	tank := e.tank("Display")
+	a := e.param("A")
+	e.enable(tank, a, true, 0)
+	// A layout saved before the maintenance card existed has no such row.
+	testutil.Exec(e.t, e.db, `INSERT INTO dashboard_cards (user_id, tank_id, card_type, parameter_id, position, size, options_json, created_at)
+		VALUES (?, ?, 'tests_due', NULL, 0, 'normal', '{}', '2026-01-01T00:00:00Z'), (?, ?, 'parameter', ?, 1, 'normal', '{}', '2026-01-01T00:00:00Z')`,
+		userA, tank, userA, tank, a)
+	wantShape(t, e.get(userA, tank), "tests_due:-:normal", "parameter:"+id(a)+":normal")
+	wantShape(t, e.get(userA, tank), "tests_due:-:normal", "parameter:"+id(a)+":normal")
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM dashboard_cards`); n != 2 {
+		t.Errorf("%d cards stored, want 2", n)
 	}
 }
 
 func TestDefaultLayoutForTankWithoutParameters(t *testing.T) {
 	e := newEnv(t)
-	wantShape(t, e.get(userA, e.tank("Empty")), "tests_due:-:normal")
+	wantShape(t, e.get(userA, e.tank("Empty")), "tests_due:-:normal", "maintenance_due:-:normal")
 }
 
 func TestConcurrentFirstRequestsCreateOneLayout(t *testing.T) {
@@ -82,8 +110,8 @@ func TestConcurrentFirstRequestsCreateOneLayout(t *testing.T) {
 	}
 	close(start)
 	wg.Wait()
-	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM dashboard_cards WHERE user_id = ? AND tank_id = ?`, userA, tank); n != 3 {
-		t.Errorf("%d cards stored after concurrent first requests, want 3", n)
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM dashboard_cards WHERE user_id = ? AND tank_id = ?`, userA, tank); n != 4 {
+		t.Errorf("%d cards stored after concurrent first requests, want 4", n)
 	}
 }
 
@@ -176,6 +204,8 @@ func TestReplaceValidation(t *testing.T) {
 		{"other tank's parameter", []map[string]any{{"card_type": "parameter", "parameter_id": foreign}}, map[string]string{"cards.0.parameter_id": "invalid"}},
 		{"unknown parameter", []map[string]any{{"card_type": "parameter_chart", "parameter_id": 99999}}, map[string]string{"cards.0.parameter_id": "invalid"}},
 		{"tests_due with parameter", []map[string]any{{"card_type": "tests_due", "parameter_id": on}}, map[string]string{"cards.0.parameter_id": "invalid"}},
+		{"maintenance_due with parameter", []map[string]any{{"card_type": "maintenance_due", "parameter_id": on}}, map[string]string{"cards.0.parameter_id": "invalid"}},
+		{"duplicate maintenance_due", []map[string]any{{"card_type": "maintenance_due"}, {"card_type": "maintenance_due"}}, map[string]string{"cards.1": "invalid"}},
 		{"bad size", []map[string]any{{"card_type": "tests_due", "size": "huge"}}, map[string]string{"cards.0.size": "invalid"}},
 		{"options not an object", []map[string]any{{"card_type": "tests_due", "options": []int{1}}}, map[string]string{"cards.0.options": "invalid"}},
 		{"options a string", []map[string]any{{"card_type": "tests_due", "options": "x"}}, map[string]string{"cards.0.options": "invalid"}},
@@ -228,7 +258,7 @@ func TestResetRestoresTheDefault(t *testing.T) {
 	a, b := e.param("A"), e.param("B")
 	e.enable(tank, a, true, 0)
 	def := e.get(userA, tank)
-	wantShape(t, def, "tests_due:-:normal", "parameter:"+id(a)+":normal")
+	wantShape(t, def, "tests_due:-:normal", "maintenance_due:-:normal", "parameter:"+id(a)+":normal")
 
 	e.put(userA, tank, []map[string]any{{"card_type": "parameter_chart", "parameter_id": a, "size": "wide"}})
 	// A parameter enabled after the customisation shows up in the regenerated default.
@@ -237,18 +267,18 @@ func TestResetRestoresTheDefault(t *testing.T) {
 	rec := e.do(userA, http.MethodPost, dashPath(tank, "/reset"), nil)
 	testutil.ExpectStatus(e.t, rec, http.StatusOK)
 	got := testutil.Decode[Layout](t, rec).Cards
-	wantShape(t, got, "tests_due:-:normal", "parameter:"+id(a)+":normal", "parameter:"+id(b)+":normal")
+	wantShape(t, got, "tests_due:-:normal", "maintenance_due:-:normal", "parameter:"+id(a)+":normal", "parameter:"+id(b)+":normal")
 	if !reflect.DeepEqual(e.get(userA, tank), got) {
 		t.Error("GET after reset differs from the reset response")
 	}
-	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM dashboard_cards`); n != 3 {
-		t.Errorf("%d cards stored after reset, want 3", n)
+	if n := testutil.Count(e.t, e.db, `SELECT COUNT(*) FROM dashboard_cards`); n != 4 {
+		t.Errorf("%d cards stored after reset, want 4", n)
 	}
 
 	// Reset on a user who never opened the dashboard also creates the default.
 	rec = e.do(userB, http.MethodPost, dashPath(tank, "/reset"), nil)
 	testutil.ExpectStatus(e.t, rec, http.StatusOK)
-	wantShape(t, testutil.Decode[Layout](t, rec).Cards, "tests_due:-:normal", "parameter:"+id(a)+":normal", "parameter:"+id(b)+":normal")
+	wantShape(t, testutil.Decode[Layout](t, rec).Cards, "tests_due:-:normal", "maintenance_due:-:normal", "parameter:"+id(a)+":normal", "parameter:"+id(b)+":normal")
 }
 
 func TestResetRefusesNonJSONBodies(t *testing.T) {
@@ -271,8 +301,8 @@ func TestEachUserHasTheirOwnLayoutPerTank(t *testing.T) {
 	e.put(userA, t1, []map[string]any{{"card_type": "parameter", "parameter_id": p, "size": "wide"}})
 
 	wantShape(t, e.get(userA, t1), "parameter:"+id(p)+":wide")
-	wantShape(t, e.get(userB, t1), "tests_due:-:normal", "parameter:"+id(p)+":normal")
-	wantShape(t, e.get(userA, t2), "tests_due:-:normal", "parameter:"+id(p)+":normal")
+	wantShape(t, e.get(userB, t1), "tests_due:-:normal", "maintenance_due:-:normal", "parameter:"+id(p)+":normal")
+	wantShape(t, e.get(userA, t2), "tests_due:-:normal", "maintenance_due:-:normal", "parameter:"+id(p)+":normal")
 
 	// Another user's replace and reset leave the first user's layout alone.
 	e.put(userB, t1, []map[string]any{{"card_type": "tests_due", "size": "wide"}})
@@ -291,9 +321,9 @@ func TestParameterCardsFollowTheParameterSwitch(t *testing.T) {
 	e.get(userA, tank)
 
 	e.enable(tank, a, false, 0)
-	wantShape(t, e.get(userA, tank), "tests_due:-:normal", "parameter:"+id(b)+":normal")
+	wantShape(t, e.get(userA, tank), "tests_due:-:normal", "maintenance_due:-:normal", "parameter:"+id(b)+":normal")
 	e.enable(tank, a, true, 0)
-	wantShape(t, e.get(userA, tank), "tests_due:-:normal", "parameter:"+id(a)+":normal", "parameter:"+id(b)+":normal")
+	wantShape(t, e.get(userA, tank), "tests_due:-:normal", "maintenance_due:-:normal", "parameter:"+id(a)+":normal", "parameter:"+id(b)+":normal")
 }
 
 func TestWhatGetShowsCanAlwaysBePutBackAfterAParameterIsArchived(t *testing.T) {
@@ -306,17 +336,17 @@ func TestWhatGetShowsCanAlwaysBePutBackAfterAParameterIsArchived(t *testing.T) {
 
 	testutil.Exec(e.t, e.db, `UPDATE parameter_definitions SET archived_at = '2026-01-01T00:00:00Z' WHERE id = ?`, b)
 	shown := e.get(userA, tank)
-	wantShape(t, shown, "tests_due:-:normal", "parameter:"+id(a)+":normal")
+	wantShape(t, shown, "tests_due:-:normal", "maintenance_due:-:normal", "parameter:"+id(a)+":normal")
 
 	back := make([]map[string]any, len(shown))
 	for i, c := range shown {
 		back[i] = map[string]any{"card_type": c.CardType, "parameter_id": c.ParameterID, "position": c.Position, "size": c.Size, "options": c.Options}
 	}
-	wantShape(t, e.put(userA, tank, back), "tests_due:-:normal", "parameter:"+id(a)+":normal")
+	wantShape(t, e.put(userA, tank, back), "tests_due:-:normal", "maintenance_due:-:normal", "parameter:"+id(a)+":normal")
 
 	// The archived parameter's card was kept and returns with the parameter.
 	testutil.Exec(e.t, e.db, `UPDATE parameter_definitions SET archived_at = NULL WHERE id = ?`, b)
-	wantShape(t, e.get(userA, tank), "tests_due:-:normal", "parameter:"+id(a)+":normal", "parameter:"+id(b)+":normal")
+	wantShape(t, e.get(userA, tank), "tests_due:-:normal", "maintenance_due:-:normal", "parameter:"+id(a)+":normal", "parameter:"+id(b)+":normal")
 }
 
 func TestReplaceKeepsHiddenCardsAfterTheShownOnesInTheirOrder(t *testing.T) {

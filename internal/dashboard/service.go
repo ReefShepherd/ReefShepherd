@@ -23,6 +23,7 @@ const (
 	typeParameter      = "parameter"
 	typeParameterChart = "parameter_chart"
 	typeTestsDue       = "tests_due"
+	typeMaintenanceDue = "maintenance_due"
 
 	sizeNormal = "normal"
 	sizeWide   = "wide"
@@ -39,6 +40,7 @@ var cardTypes = []cardType{
 	{typeParameter, true},
 	{typeParameterChart, true},
 	{typeTestsDue, false},
+	{typeMaintenanceDue, false},
 }
 
 var sizes = []string{sizeNormal, sizeWide}
@@ -198,7 +200,7 @@ func (s *Service) Replace(ctx context.Context, userID, tankID int64, cards []Car
 	return out, err
 }
 
-// seedDefault inserts a tests_due card followed by one parameter card per enabled parameter, in the tank's parameter order.
+// seedDefault inserts a tests_due card, a maintenance_due card, then one parameter card per enabled parameter, in the tank's parameter order.
 func (s *Service) seedDefault(ctx context.Context, q *dbgen.Queries, userID, tankID int64) error {
 	ids, err := q.ListEnabledTankParameterIDs(ctx, tankID)
 	if err != nil {
@@ -218,8 +220,11 @@ func (s *Service) seedDefault(ctx context.Context, q *dbgen.Queries, userID, tan
 	if err := insert(0, typeTestsDue, nil); err != nil {
 		return err
 	}
+	if err := insert(1, typeMaintenanceDue, nil); err != nil {
+		return err
+	}
 	for i, id := range ids {
-		if err := insert(i+1, typeParameter, &id); err != nil {
+		if err := insert(i+2, typeParameter, &id); err != nil {
 			return err
 		}
 	}
