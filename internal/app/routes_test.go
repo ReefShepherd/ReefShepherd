@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -224,7 +225,12 @@ func TestFeatureRoutesLogUnexpectedFailuresToTheAppLogger(t *testing.T) {
 	store := settings.NewStore(database)
 	hasher := password.NewHasher(password.Params{Time: 1, MemoryKiB: 64, Threads: 1})
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
-	app, err := newApp(config.Config{}, logger, database, store, hasher, webui.Handler(logger))
+	// The backups folder sits below a regular file, so listing it fails with something other than a missing folder.
+	dataFile := filepath.Join(t.TempDir(), "not-a-folder")
+	if err := os.WriteFile(dataFile, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app, err := newApp(config.Config{DataDir: dataFile}, logger, database, store, hasher, webui.Handler(logger))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,16 +239,111 @@ func TestFeatureRoutesLogUnexpectedFailuresToTheAppLogger(t *testing.T) {
 	c.setup(nil)
 	tank := mustCreateTank(t, c)
 	tankPath := "/api/v1/tanks/" + strconv.FormatInt(tank.ID, 10)
+	rec := c.do(http.MethodPost, "/api/v1/maintenance/tasks", map[string]any{"name": "Filter", "schedule": map[string]any{"kind": "after_last", "interval_days": 7}})
+	testutil.ExpectStatus(t, rec, http.StatusCreated)
+	taskPath := "/api/v1/maintenance/tasks/" + strconv.FormatInt(testutil.Decode[struct {
+		ID int64 `json:"id"`
+	}](t, rec).ID, 10)
 
 	testutil.Exec(t, a.db, `ALTER TABLE parameter_definitions RENAME TO parameter_definitions_gone`)
 	testutil.Exec(t, a.db, `ALTER TABLE dashboard_cards RENAME TO dashboard_cards_gone`)
 	testutil.Exec(t, a.db, `ALTER TABLE tanks RENAME TO tanks_gone`)
-	for _, path := range []string{"/api/v1/parameters", tankPath + "/dashboard", "/api/v1/tanks"} {
+	testutil.Exec(t, a.db, `ALTER TABLE maintenance_presets RENAME TO maintenance_presets_gone`)
+	testutil.Exec(t, a.db, `ALTER TABLE maintenance_tasks RENAME TO maintenance_tasks_gone`)
+	testutil.Exec(t, a.db, `ALTER TABLE maintenance_completions RENAME TO maintenance_completions_gone`)
+	testutil.Exec(t, a.db, `ALTER TABLE notification_channels RENAME TO notification_channels_gone`)
+	testutil.Exec(t, a.db, `ALTER TABLE notifications RENAME TO notifications_gone`)
+	for _, path := range []string{
+		"/api/v1/parameters", tankPath + "/dashboard", "/api/v1/tanks",
+		"/api/v1/maintenance/presets", "/api/v1/maintenance/tasks", taskPath, taskPath + "/completions",
+		"/api/v1/notification-channels", "/api/v1/notifications", "/api/v1/notifications/unread-count", "/api/v1/backups",
+	} {
 		testutil.ExpectError(t, c.do(http.MethodGet, path, nil), http.StatusInternalServerError, "internal")
 		if !loggedFailure(logs.String(), path) {
 			t.Errorf("no failure logged for %s in:\n%s", path, logs.String())
 		}
 	}
+}
+
+// TestChannelAndBackupRoutesAreForAdminsOnly expects every channel and backup route to answer a signed-in member with 403.
+func TestChannelAndBackupRoutesAreForAdminsOnly(t *testing.T) {
+	_, protected := declaredAPIRoutes(t)
+	var adminOnly []string
+	for _, pattern := range protected {
+		if strings.Contains(pattern, " /api/v1/notification-channels") || strings.Contains(pattern, " /api/v1/backups") {
+			adminOnly = append(adminOnly, pattern)
+		}
+	}
+	// Five channel routes and four backup routes.
+	if len(adminOnly) != 9 {
+		t.Fatalf("route scan found %d channel and backup routes, want 9: %v", len(adminOnly), adminOnly)
+	}
+
+	a, admin := adminAndApp(t)
+	addUser(t, admin, "member1", "member")
+	member := signedInAs(t, a, "member1")
+	for _, pattern := range adminOnly {
+		method, target, _ := strings.Cut(pathWildcard.ReplaceAllString(pattern, "1"), " ")
+		var body any
+		if method != http.MethodGet && method != http.MethodDelete {
+			body = map[string]any{}
+		}
+		testutil.ExpectError(t, member.do(method, target, body), http.StatusForbidden, "forbidden")
+	}
+
+	// The inbox and the maintenance lists stay open to members.
+	for _, target := range []string{"/api/v1/notifications", "/api/v1/notifications/unread-count", "/api/v1/maintenance/presets", "/api/v1/maintenance/tasks"} {
+		testutil.ExpectStatus(t, member.do(http.MethodGet, target, nil), http.StatusOK)
+	}
+}
+
+// TestMembersCanEditMaintenancePresets covers the one maintenance write that earlier checks only ran as an admin.
+func TestMembersCanEditMaintenancePresets(t *testing.T) {
+	a, admin := adminAndApp(t)
+	addUser(t, admin, "member1", "member")
+	member := signedInAs(t, a, "member1")
+
+	type preset struct {
+		ID          int64   `json:"id"`
+		Name        string  `json:"name"`
+		Description string  `json:"description"`
+		ArchivedAt  *string `json:"archived_at"`
+	}
+	list := testutil.DecodeItems[preset](t, member.do(http.MethodGet, "/api/v1/maintenance/presets", nil))
+	if len(list) == 0 {
+		t.Fatal("no presets to edit")
+	}
+	path := "/api/v1/maintenance/presets/" + strconv.FormatInt(list[0].ID, 10)
+
+	rec := member.do(http.MethodPatch, path, map[string]any{"name": "Renamed by a member", "description": "Edited"})
+	testutil.ExpectStatus(t, rec, http.StatusOK)
+	var got preset
+	testutil.DecodeInto(t, rec, &got)
+	if got.ID != list[0].ID || got.Name != "Renamed by a member" || got.Description != "Edited" {
+		t.Errorf("patched preset = %+v", got)
+	}
+
+	// Archiving hides the template from the default list, and a member can bring it back.
+	testutil.ExpectStatus(t, member.do(http.MethodPatch, path, map[string]any{"archived": true}), http.StatusOK)
+	for _, p := range testutil.DecodeItems[preset](t, member.do(http.MethodGet, "/api/v1/maintenance/presets", nil)) {
+		if p.ID == got.ID {
+			t.Error("the archived preset is still in the default list")
+		}
+	}
+	testutil.ExpectStatus(t, member.do(http.MethodPatch, path, map[string]any{"archived": false}), http.StatusOK)
+
+	// The change is visible to the admin, so it was stored and not just echoed.
+	var seen *preset
+	for _, p := range testutil.DecodeItems[preset](t, admin.do(http.MethodGet, "/api/v1/maintenance/presets", nil)) {
+		if p.ID == got.ID {
+			seen = &p
+		}
+	}
+	if seen == nil || seen.Name != "Renamed by a member" || seen.ArchivedAt != nil {
+		t.Errorf("preset as the admin sees it = %+v", seen)
+	}
+
+	testutil.ExpectError(t, member.do(http.MethodPatch, path, map[string]any{"name": ""}), http.StatusUnprocessableEntity, "validation", "name")
 }
 
 // loggedFailure reports whether log has an unexpected-failure line for path.

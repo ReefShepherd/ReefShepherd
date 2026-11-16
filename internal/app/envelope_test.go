@@ -9,7 +9,9 @@ import (
 	"slices"
 	"strconv"
 	"testing"
+	"time"
 
+	"github.com/reefshepherd/reefshepherd/internal/config"
 	"github.com/reefshepherd/reefshepherd/internal/testutil"
 )
 
@@ -93,6 +95,61 @@ func TestCollectionsAreItemsEnvelopes(t *testing.T) {
 		}
 		if _, ok := body["items"]; ok {
 			t.Errorf("%s was re-keyed to items", c.name)
+		}
+	}
+}
+
+// TestMaintenanceNotificationAndBackupListsAreEnvelopes pins the shape of the pure lists (items only) and the paged lists (items and next_cursor), empty and filled.
+func TestMaintenanceNotificationAndBackupListsAreEnvelopes(t *testing.T) {
+	a := newAPITestApp(t, config.Config{DataDir: t.TempDir()})
+	admin := newClient(t, a)
+	admin.setup(nil)
+	presets := testutil.Count(t, a.db, `SELECT COUNT(*) FROM maintenance_presets WHERE archived_at IS NULL`)
+	if presets == 0 {
+		t.Fatal("no shipped presets to list")
+	}
+
+	pure := []struct {
+		name, path string
+		empty, one int
+	}{
+		{"GET presets", "/api/v1/maintenance/presets", presets, presets},
+		{"GET tasks", "/api/v1/maintenance/tasks?status=all", 0, 1},
+		{"GET channels", "/api/v1/notification-channels", 0, 1},
+		{"GET backups", "/api/v1/backups", 0, 1},
+	}
+	for _, c := range pure {
+		expectItems(t, "empty "+c.name, expectKeys(t, "empty "+c.name, admin.do(http.MethodGet, c.path, nil), "items"), c.empty)
+	}
+	expectItems(t, "empty inbox", expectKeys(t, "empty inbox", admin.do(http.MethodGet, "/api/v1/notifications", nil), "items", "next_cursor"), 0)
+
+	// A task made with a last-done date holds one completion.
+	created := admin.do(http.MethodPost, "/api/v1/maintenance/tasks", map[string]any{
+		"name": "Water change", "tank_id": nil, "schedule": map[string]any{"kind": "after_last", "interval_days": 7},
+		"last_done_on": time.Now().UTC().AddDate(0, 0, -1).Format(time.DateOnly),
+	})
+	testutil.ExpectStatus(t, created, http.StatusCreated)
+	task := testutil.Decode[struct {
+		ID int64 `json:"id"`
+	}](t, created)
+	testutil.ExpectStatus(t, admin.do(http.MethodPost, "/api/v1/notification-channels", map[string]any{
+		"name": "Hook", "kind": "webhook", "config": map[string]any{"url": "https://hooks.example.org/reef"},
+	}), http.StatusCreated)
+	testutil.ExpectStatus(t, admin.do(http.MethodPost, "/api/v1/backups", nil), http.StatusCreated)
+	testutil.Exec(t, a.db, `INSERT INTO notifications (event_type, title, source_kind, source_id, occurrence, created_at)
+		VALUES ('backup_failed', 'Backup failed', 'backup', 0, 'x', strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '+1 minute'))`)
+
+	for _, c := range pure {
+		expectItems(t, c.name, expectKeys(t, c.name, admin.do(http.MethodGet, c.path, nil), "items"), c.one)
+	}
+	for _, c := range []struct{ name, path string }{
+		{"GET completions", "/api/v1/maintenance/tasks/" + strconv.FormatInt(task.ID, 10) + "/completions"},
+		{"GET inbox", "/api/v1/notifications"},
+	} {
+		page := expectKeys(t, c.name, admin.do(http.MethodGet, c.path, nil), "items", "next_cursor")
+		expectItems(t, c.name, page, 1)
+		if string(page["next_cursor"]) != "null" {
+			t.Errorf("%s last page next_cursor = %s, want null", c.name, page["next_cursor"])
 		}
 	}
 }
