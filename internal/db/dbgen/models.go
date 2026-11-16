@@ -16,6 +16,101 @@ type DashboardCard struct {
 	CreatedAt   string
 }
 
+type MaintenanceCompletion struct {
+	ID        int64
+	TaskID    int64
+	DoneAt    string
+	Outcome   string
+	Note      string
+	DoneBy    *int64
+	CreatedAt string
+}
+
+type MaintenancePreset struct {
+	ID            int64
+	PresetKey     *string
+	Name          string
+	Description   string
+	Tankless      int64
+	ScheduleKind  string
+	IntervalDays  *int64
+	Weekdays      *int64
+	IntervalWeeks int64
+	MonthDay      *int64
+	AnchorDate    *string
+	SortOrder     int64
+	ArchivedAt    *string
+	CreatedAt     string
+	UpdatedAt     string
+}
+
+type MaintenanceTask struct {
+	ID            int64
+	TankID        *int64
+	PresetID      *int64
+	Name          string
+	Description   string
+	ScheduleKind  string
+	IntervalDays  *int64
+	Weekdays      *int64
+	IntervalWeeks int64
+	MonthDay      *int64
+	AnchorDate    *string
+	DueTime       string
+	ScheduleSince string
+	Notify        int64
+	Paused        int64
+	CreatedAt     string
+	UpdatedAt     string
+}
+
+type Notification struct {
+	ID         int64
+	EventType  string
+	Severity   string
+	Title      string
+	Body       string
+	Link       string
+	TankID     *int64
+	SourceKind string
+	SourceID   int64
+	Occurrence string
+	CreatedAt  string
+}
+
+type NotificationChannel struct {
+	ID         int64
+	Name       string
+	Kind       string
+	ConfigJson string
+	Enabled    int64
+	CreatedAt  string
+	UpdatedAt  string
+}
+
+type NotificationDelivery struct {
+	ID             int64
+	NotificationID int64
+	ChannelID      int64
+	Status         string
+	Attempts       int64
+	LastError      string
+	NextAttemptAt  *string
+	SentAt         *string
+	CreatedAt      string
+}
+
+type NotificationRead struct {
+	NotificationID int64
+	UserID         int64
+	ReadAt         string
+}
+
+type NotificationSubscription struct {
+	ChannelID int64
+	EventType string
+}
+
 type ParameterDefinition struct {
 	ID                      int64
 	PresetKey               *string

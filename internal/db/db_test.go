@@ -61,15 +61,17 @@ func TestMigrateCreatesSchemaAndSeeds(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if v, err := d.Version(t.Context()); err != nil || v != 1 {
-		t.Errorf("version = %d, %v; want 1", v, err)
+	if v, err := d.Version(t.Context()); err != nil || v != 2 {
+		t.Errorf("version = %d, %v; want 2", v, err)
 	}
 	if _, err := os.Stat(backups); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("a fresh database wrote a backup (stat err = %v)", err)
 	}
 
 	wantTables := []string{
-		"dashboard_cards", "parameter_definitions", "sessions", "settings", "tank_parameters",
+		"dashboard_cards", "maintenance_completions", "maintenance_presets", "maintenance_tasks",
+		"notification_channels", "notification_deliveries", "notification_reads", "notification_subscriptions",
+		"notifications", "parameter_definitions", "sessions", "settings", "tank_parameters",
 		"tanks", "test_results", "user_preferences", "user_recovery_codes", "user_totp", "users",
 	}
 	rows, err := d.R.QueryContext(t.Context(),
@@ -103,6 +105,11 @@ func TestMigrateCreatesSchemaAndSeeds(t *testing.T) {
 		"sessions_expires":         "expires_at",
 		"test_results_series":      "tank_id,parameter_id,measured_at",
 		"dashboard_cards_owner":    "user_id,tank_id,position",
+
+		"maintenance_tasks_tank":          "tank_id",
+		"maintenance_completions_task":    "task_id,done_at",
+		"notifications_created":           "created_at",
+		"notification_deliveries_pending": "status,next_attempt_at",
 	}
 	for idx, wantColumns := range wantIndexes {
 		var gotColumns string
@@ -176,6 +183,235 @@ func TestMigrateSeedsParameterPresets(t *testing.T) {
 	}
 }
 
+func TestMigrateSeedsMaintenancePresets(t *testing.T) {
+	d := migrated(t)
+
+	type preset struct {
+		key, name, kind string
+		days            int
+		tankless        bool
+	}
+	want := []preset{
+		{"water_change", "Water change", "after_last", 7, false},
+		{"skimmer_cup", "Empty skimmer cup", "after_last", 3, false},
+		{"filter_media", "Change filter socks or fleece", "after_last", 3, false},
+		{"glass", "Clean glass", "after_last", 3, false},
+		{"ato_reservoir", "Refill ATO reservoir", "after_last", 7, false},
+		{"carbon_gfo", "Replace carbon and GFO", "after_last", 30, false},
+		{"probe_calibration", "Calibrate probes", "after_last", 30, false},
+		{"overflow", "Clean overflow and plumbing", "after_last", 30, false},
+		{"pumps", "Clean return pump and powerheads", "after_last", 90, false},
+		{"rodi_cartridges", "Replace RO/DI cartridges", "after_last", 180, true},
+	}
+
+	rows, err := d.R.QueryContext(t.Context(),
+		`SELECT preset_key, name, schedule_kind, interval_days, tankless, description, sort_order, archived_at
+		FROM maintenance_presets ORDER BY sort_order`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []preset
+	for rows.Next() {
+		var p preset
+		var tankless, sortOrder int
+		var description string
+		var archivedAt *string
+		if err := rows.Scan(&p.key, &p.name, &p.kind, &p.days, &tankless, &description, &sortOrder, &archivedAt); err != nil {
+			t.Fatal(err)
+		}
+		p.tankless = tankless == 1
+		if description != "" || archivedAt != nil || sortOrder != (len(got)+1)*10 {
+			t.Errorf("preset %s: description %q, archived_at %v, sort_order %d", p.key, description, archivedAt, sortOrder)
+		}
+		got = append(got, p)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("presets = %+v, want %+v", got, want)
+	}
+}
+
+func TestMigrationTablesAreStrict(t *testing.T) {
+	d := migrated(t)
+	for _, table := range []string{
+		"maintenance_presets", "maintenance_tasks", "maintenance_completions", "notification_channels",
+		"notification_subscriptions", "notifications", "notification_reads", "notification_deliveries",
+	} {
+		var strict int
+		err := d.R.QueryRowContext(t.Context(), `SELECT strict FROM pragma_table_list WHERE schema = 'main' AND name = ?`, table).Scan(&strict)
+		if err != nil || strict != 1 {
+			t.Errorf("table %s: strict = %d, %v; want 1", table, strict, err)
+		}
+	}
+	if _, err := d.W.ExecContext(t.Context(), `INSERT INTO notification_channels (name, kind, config_json, enabled) VALUES ('c', 'ntfy', '{}', 'yes')`); err == nil {
+		t.Error("text in an integer column of a new table was accepted")
+	}
+}
+
+func TestNotificationOccurrenceIsUnique(t *testing.T) {
+	d := migrated(t)
+	insert := func(kind string, id int, occurrence string) error {
+		_, err := d.W.ExecContext(t.Context(),
+			`INSERT INTO notifications (event_type, title, source_kind, source_id, occurrence) VALUES ('maintenance_due', 't', ?, ?, ?)`,
+			kind, id, occurrence)
+		return err
+	}
+	if err := insert("maintenance_task", 1, "2026-11-15T09:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if err := insert("maintenance_task", 1, "2026-11-15T09:00:00Z"); err == nil {
+		t.Error("a second notification with the same source_kind, source_id and occurrence was accepted")
+	}
+	// Source id 0 is how a notification without a row source is keyed, and it must dedupe too.
+	if err := insert("backup", 0, "2026-11-15T03:30:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if err := insert("backup", 0, "2026-11-15T03:30:00Z"); err == nil {
+		t.Error("a second notification for the same backup instant was accepted")
+	}
+	others := map[string]func() error{
+		"another occurrence": func() error { return insert("maintenance_task", 1, "2026-11-16T09:00:00Z") },
+		"another source id":  func() error { return insert("maintenance_task", 2, "2026-11-15T09:00:00Z") },
+		"another source":     func() error { return insert("test_result", 1, "2026-11-15T09:00:00Z") },
+	}
+	for name, run := range others {
+		if err := run(); err != nil {
+			t.Errorf("%s was rejected: %v", name, err)
+		}
+	}
+	if _, err := d.W.ExecContext(t.Context(), `INSERT INTO notifications (event_type, title, source_kind, source_id) VALUES ('e', 't', 'backup', 0)`); err == nil {
+		t.Error("a notification without an occurrence was accepted")
+	}
+}
+
+func TestMigrateFromM1KeepsDataAndWritesPremigrateBackup(t *testing.T) {
+	ctx := t.Context()
+	backups := filepath.Join(t.TempDir(), "backups")
+	d := openTemp(t)
+
+	if err := d.migrate(ctx, firstOnly(t), backups, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := d.Version(ctx); err != nil || v != 1 {
+		t.Fatalf("version before upgrade = %d, %v; want 1", v, err)
+	}
+	exec(t, d.W, `INSERT INTO users (id, username) VALUES (1, 'owner')`)
+	exec(t, d.W, `INSERT INTO tanks (id, name, volume_liters) VALUES (1, 'Display', 300)`)
+	exec(t, d.W, `INSERT INTO tank_parameters (tank_id, parameter_id, ideal_low, ideal_high) VALUES (1, 1, 24.5, 27.5)`)
+	exec(t, d.W, `INSERT INTO test_results (id, tank_id, parameter_id, measured_at, value, created_by) VALUES
+		(1, 1, 1, '2026-10-24T10:00:00Z', 25.5, 1), (2, 1, 1, '2026-10-25T10:00:00Z', 26.0, 1)`)
+	snapshot := func(conn dbgen.DBTX) string {
+		t.Helper()
+		var out string
+		err := conn.QueryRowContext(ctx, `SELECT
+			(SELECT group_concat(id || ':' || name || ':' || volume_liters, ',') FROM tanks) || '|' ||
+			(SELECT group_concat(tank_id || ':' || parameter_id || ':' || ideal_low || ':' || ideal_high, ',') FROM tank_parameters) || '|' ||
+			(SELECT group_concat(id || ':' || measured_at || ':' || value || ':' || created_by, ',') FROM (SELECT * FROM test_results ORDER BY id)) || '|' ||
+			(SELECT COUNT(*) FROM parameter_definitions)`).Scan(&out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	before := snapshot(d.R)
+
+	if err := d.Migrate(ctx, backups); err != nil {
+		t.Fatal(err)
+	}
+
+	if v, err := d.Version(ctx); err != nil || v != 2 {
+		t.Errorf("version after upgrade = %d, %v; want 2", v, err)
+	}
+	if after := snapshot(d.R); after != before {
+		t.Errorf("M1 rows changed by the upgrade:\n got %s\nwant %s", after, before)
+	}
+	if n := count(t, d.R, `SELECT COUNT(*) FROM maintenance_presets`); n != 10 {
+		t.Errorf("%d maintenance presets after the upgrade, want 10", n)
+	}
+
+	files, err := filepath.Glob(filepath.Join(backups, "reefshepherd-premigrate-00002-*.db"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("premigrate backups = %v, %v; want exactly one", files, err)
+	}
+	copyDB, err := Open(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer copyDB.Close()
+	if v, err := copyDB.Version(ctx); err != nil || v != 1 {
+		t.Errorf("backup version = %d, %v; want 1", v, err)
+	}
+	if got := snapshot(copyDB.R); got != before {
+		t.Errorf("backup rows differ from the M1 database:\n got %s\nwant %s", got, before)
+	}
+	if n := count(t, copyDB.R, `SELECT COUNT(*) FROM sqlite_master WHERE name = 'maintenance_tasks'`); n != 0 {
+		t.Error("backup already holds the new tables")
+	}
+}
+
+func TestInReadTx(t *testing.T) {
+	d := migrated(t)
+	ctx := t.Context()
+	exec(t, d.W, `INSERT INTO tanks (name) VALUES ('first')`)
+	tanks := func(tx *sql.Tx) int { return count(t, tx, `SELECT COUNT(*) FROM tanks`) }
+
+	t.Run("reads one snapshot and rejects writes", func(t *testing.T) {
+		err := d.InReadTx(ctx, func(tx *sql.Tx) error {
+			if n := tanks(tx); n != 1 {
+				t.Errorf("tanks = %d, want 1", n)
+			}
+			exec(t, d.W, `INSERT INTO tanks (name) VALUES ('concurrent')`)
+			if n := tanks(tx); n != 1 {
+				t.Errorf("tanks after a concurrent commit = %d, want the snapshot's 1", n)
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO tanks (name) VALUES ('from tx')`); err == nil {
+				t.Error("a write inside a read transaction was accepted")
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := count(t, d.R, `SELECT COUNT(*) FROM tanks`); n != 2 {
+			t.Errorf("tanks after the transaction = %d, want 2", n)
+		}
+	})
+
+	t.Run("returns the error from fn", func(t *testing.T) {
+		boom := errors.New("boom")
+		if err := d.InReadTx(ctx, func(*sql.Tx) error { return boom }); !errors.Is(err, boom) {
+			t.Errorf("err = %v, want boom", err)
+		}
+	})
+
+	t.Run("a panic releases the connection", func(t *testing.T) {
+		// More panics than pooled reader connections exhaust the pool if each one leaks its connection.
+		short, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		for range readerConns + 1 {
+			func() {
+				defer func() { _ = recover() }()
+				_ = d.InReadTx(short, func(*sql.Tx) error { panic("handler bug") })
+			}()
+		}
+		if err := d.InReadTx(short, func(tx *sql.Tx) error { return tx.QueryRowContext(short, `SELECT 1`).Err() }); err != nil {
+			t.Fatalf("reader pool stayed exhausted after panics: %v", err)
+		}
+	})
+
+	t.Run("a canceled context fails to begin", func(t *testing.T) {
+		canceled, cancel := context.WithCancel(ctx)
+		cancel()
+		called := false
+		if err := d.InReadTx(canceled, func(*sql.Tx) error { called = true; return nil }); err == nil || called {
+			t.Errorf("err = %v, called = %v; want an error and no call", err, called)
+		}
+	})
+}
+
 func equalFloatPtr(a, b *float64) bool {
 	if a == nil || b == nil {
 		return a == b
@@ -192,8 +428,8 @@ func TestMigrateTwiceIsNoOp(t *testing.T) {
 		}
 		exec(t, d.W, `INSERT INTO tanks (name) VALUES ('kept')`)
 	}
-	if n := count(t, d.R, `SELECT COUNT(*) FROM goose_db_version WHERE version_id > 0`); n != 1 {
-		t.Errorf("%d versions recorded, want 1", n)
+	if n := count(t, d.R, `SELECT COUNT(*) FROM goose_db_version WHERE version_id > 0`); n != 2 {
+		t.Errorf("%d versions recorded, want 2", n)
 	}
 	if n := count(t, d.R, `SELECT COUNT(*) FROM parameter_definitions`); n != 10 {
 		t.Errorf("%d presets after the second migrate, want 10", n)
@@ -571,8 +807,8 @@ func TestBackupToWritesVerifiedCopy(t *testing.T) {
 	if n := count(t, c.R, `SELECT COUNT(*) FROM tanks WHERE name = 'backed up'`); n != 1 {
 		t.Errorf("copy holds %d matching tanks, want 1", n)
 	}
-	if v, err := c.Version(t.Context()); err != nil || v != 1 {
-		t.Errorf("copy version = %d, %v; want 1", v, err)
+	if v, err := c.Version(t.Context()); err != nil || v != 2 {
+		t.Errorf("copy version = %d, %v; want 2", v, err)
 	}
 
 	if err := d.BackupTo(t.Context(), dest); err != nil {
@@ -645,6 +881,12 @@ func TestTimestampDefaultsUseUTCFormat(t *testing.T) {
 	exec(t, d.W, `INSERT INTO tank_parameters (tank_id, parameter_id) VALUES (1, 1)`)
 	exec(t, d.W, `INSERT INTO test_results (tank_id, parameter_id, measured_at, value) VALUES (1, 1, 'x', 1)`)
 	exec(t, d.W, `INSERT INTO dashboard_cards (user_id, tank_id, card_type, position) VALUES (1, 1, 'tests_due', 0)`)
+	exec(t, d.W, `INSERT INTO maintenance_tasks (id, tank_id, name) VALUES (1, 1, 'task')`)
+	exec(t, d.W, `INSERT INTO maintenance_completions (task_id, done_at) VALUES (1, 'x')`)
+	exec(t, d.W, `INSERT INTO notification_channels (id, name, kind, config_json) VALUES (1, 'channel', 'ntfy', '{}')`)
+	exec(t, d.W, `INSERT INTO notifications (id, event_type, title, source_kind, source_id, occurrence) VALUES (1, 'maintenance_due', 'title', 'maintenance_task', 1, 'x')`)
+	exec(t, d.W, `INSERT INTO notification_reads (notification_id, user_id) VALUES (1, 1)`)
+	exec(t, d.W, `INSERT INTO notification_deliveries (notification_id, channel_id) VALUES (1, 1)`)
 
 	want := map[string]string{
 		"settings":              "updated_at",
@@ -658,6 +900,14 @@ func TestTimestampDefaultsUseUTCFormat(t *testing.T) {
 		"tank_parameters":       "schedule_since,updated_at",
 		"test_results":          "created_at,updated_at",
 		"dashboard_cards":       "created_at",
+
+		"maintenance_presets":     "created_at,updated_at",
+		"maintenance_tasks":       "schedule_since,created_at,updated_at",
+		"maintenance_completions": "created_at",
+		"notification_channels":   "created_at,updated_at",
+		"notifications":           "created_at",
+		"notification_reads":      "read_at",
+		"notification_deliveries": "created_at",
 	}
 	shape := regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$`)
 	for table, columns := range want {

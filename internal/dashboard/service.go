@@ -92,7 +92,7 @@ func (s *Service) Get(ctx context.Context, userID, tankID int64) (Layout, error)
 	var out Layout
 	var seed bool
 	// One read transaction keeps the card rows and the enabled-parameter list from the same snapshot.
-	err := s.inReadTx(ctx, func(tx *sql.Tx) error {
+	err := s.DB.InReadTx(ctx, func(tx *sql.Tx) error {
 		if err := tanks.Require(ctx, tx, tankID); err != nil {
 			return err
 		}
@@ -130,17 +130,6 @@ func (s *Service) Get(ctx context.Context, userID, tankID int64) (Layout, error)
 		return err
 	})
 	return out, err
-}
-
-// inReadTx runs fn in a read-only transaction on the reader pool, so every read in fn sees the database as it was when the first one ran.
-func (s *Service) inReadTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
-	tx, err := s.DB.R.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return fmt.Errorf("begin read transaction: %w", err)
-	}
-	// Nothing was written, so ending the transaction is always a rollback.
-	defer func() { _ = tx.Rollback() }()
-	return fn(tx)
 }
 
 // Reset discards the user's cards for a tank and creates the default layout again.

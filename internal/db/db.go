@@ -127,6 +127,17 @@ func (d *DB) InTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 	return nil
 }
 
+// InReadTx runs fn in a read-only transaction on the reader pool, so every read in fn sees the database as it was when the first one ran.
+func (d *DB) InReadTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
+	tx, err := d.R.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("begin read transaction: %w", err)
+	}
+	// Nothing was written, so ending the transaction is always a rollback, which also covers a panic in fn.
+	defer func() { _ = tx.Rollback() }()
+	return fn(tx)
+}
+
 // Migrate applies the pending migrations, first writing a premigrate backup into backupDir when the database already has data.
 func (d *DB) Migrate(ctx context.Context, backupDir string) error {
 	fsys, err := embeddedMigrations()
