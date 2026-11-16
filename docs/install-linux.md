@@ -59,7 +59,7 @@ If the service fails with `status=226/NAMESPACE` in a Proxmox container, open th
 
 ## Updating
 
-Replace the binary and restart. Database changes are applied on startup, and a backup of the existing data is written to the `backups` folder first.
+Replace the binary and restart. Database changes are applied on startup, and a backup of the existing database is written to the `backups` folder first.
 
 ```sh
 install -m 0755 reefshepherd /usr/local/bin/reefshepherd
@@ -69,13 +69,19 @@ reefshepherd version
 
 If the unit file changed, copy it again and run `systemctl daemon-reload` before the restart.
 
+On the first start of a new version, if there are pending migrations and the database already has data, the app copies the current database to `backups/reefshepherd-premigrate-<schema version>-<UTC time>.db` before applying any migrations. The five-digit schema version is the target version of the last pending migration. This lets you restore the old schema if needed. If something goes wrong with the migration, see the backup and restore procedures below.
+
+## Backups
+
+The app makes a daily backup of the database. See [Backups and restore](backup-restore.md) for how to download, delete or restore a backup.
+
 ## Where things live
 
 | What | Where |
 |---|---|
 | Data directory | `/var/lib/reefshepherd` |
 | Database | `/var/lib/reefshepherd/reefshepherd.db` (plus `-wal` and `-shm` files while running) |
-| Backups made before a database upgrade | `/var/lib/reefshepherd/backups/` |
+| Backups (daily, before migrations, before restores) | `/var/lib/reefshepherd/backups/` |
 | Settings read at startup | `/etc/reefshepherd/reefshepherd.env` |
 
 To back up or move an installation by hand, stop the service, copy the whole data directory, and start it again:
