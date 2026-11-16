@@ -1,5 +1,6 @@
 <script lang="ts">
   import { m } from '#lib/paraglide/messages.js';
+  import NotificationBell from './NotificationBell.svelte';
   import TankSwitcher from './TankSwitcher.svelte';
   import ThemeSwitcher from './ThemeSwitcher.svelte';
 </script>
@@ -9,6 +10,7 @@
   <div class="controls">
     <TankSwitcher />
     <ThemeSwitcher />
+    <NotificationBell />
   </div>
 </header>
 
@@ -40,6 +42,16 @@
     justify-content: flex-end;
     gap: var(--space-2);
     min-width: 0;
+  }
+
+  /* The theme choice keeps its natural width and a long tank name gives way first. */
+  .controls :global(#theme-switcher) {
+    flex: none;
+  }
+
+  .controls :global(#tank-switcher) {
+    flex: 0 1 auto;
+    text-overflow: ellipsis;
   }
 
   .controls :global(select) {
