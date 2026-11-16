@@ -1,0 +1,4 @@
+{
+  "notify_test_title": "Test notification from %[1]s",
+  "notify_test_body": "If you can read this, the channel is set up correctly."
+}

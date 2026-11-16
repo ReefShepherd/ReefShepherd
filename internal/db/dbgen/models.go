@@ -96,6 +96,7 @@ type NotificationDelivery struct {
 	Attempts       int64
 	LastError      string
 	NextAttemptAt  *string
+	LastAttemptAt  *string
 	SentAt         *string
 	CreatedAt      string
 }

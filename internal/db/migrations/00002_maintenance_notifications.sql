@@ -128,6 +128,8 @@ CREATE TABLE notification_deliveries (
     last_error      TEXT NOT NULL DEFAULT '',
     -- When the next attempt is due, NULL once the delivery is sent or has failed for good.
     next_attempt_at TEXT,
+    -- When the latest attempt was made, NULL before the first one.
+    last_attempt_at TEXT,
     sent_at         TEXT,
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     UNIQUE (notification_id, channel_id)
