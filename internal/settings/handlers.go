@@ -41,6 +41,9 @@ type patchSettingsRequest struct {
 	InstanceName        *string           `json:"instance_name"`
 	Timezone            *string           `json:"timezone"`
 	ReminderDefaultTime *string           `json:"reminder_default_time"`
+	BackupEnabled       *bool             `json:"backup_enabled"`
+	BackupTime          *string           `json:"backup_time"`
+	BackupKeep          *int              `json:"backup_keep"`
 	Units               map[string]string `json:"units"`
 	AuthMode            *string           `json:"auth_mode"`
 	Password            string            `json:"password"`

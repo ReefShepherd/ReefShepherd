@@ -38,6 +38,9 @@ type Snapshot struct {
 	InstanceName        string            `json:"instance_name"`
 	Timezone            string            `json:"timezone"`
 	ReminderDefaultTime string            `json:"reminder_default_time"`
+	BackupEnabled       bool              `json:"backup_enabled"`
+	BackupTime          string            `json:"backup_time"`
+	BackupKeep          int               `json:"backup_keep"`
 	Units               map[string]string `json:"units"`
 	// AuthMode is the mode in force, which an environment override may set.
 	AuthMode string `json:"auth_mode"`
@@ -50,6 +53,9 @@ type PatchInput struct {
 	InstanceName        *string
 	Timezone            *string
 	ReminderDefaultTime *string
+	BackupEnabled       *bool
+	BackupTime          *string
+	BackupKeep          *int
 	Units               map[string]string
 	AuthMode            *string
 	// Password is the admin's own password, required to turn login off.
@@ -68,6 +74,7 @@ func (s *Service) Get(ctx context.Context) (Snapshot, error) {
 	}
 	out := Snapshot{
 		InstanceName: v.InstanceName, Timezone: v.Timezone, ReminderDefaultTime: v.ReminderDefaultTime,
+		BackupEnabled: v.BackupEnabled, BackupTime: v.BackupTime, BackupKeep: v.BackupKeep,
 		Units: UnitsToStrings(v.Units), AuthMode: mode, EnvLocked: map[string]string{},
 	}
 	if s.Auth.ModeLocked() {
@@ -78,7 +85,11 @@ func (s *Service) Get(ctx context.Context) (Snapshot, error) {
 
 // Patch applies the changes all together or not at all and returns the settings afterwards; r is the request the admin's password check counts against, and a login mode the environment decides is refused with auth.ErrEnvLocked.
 func (s *Service) Patch(ctx context.Context, r *http.Request, adminID int64, in PatchInput) (Snapshot, error) {
-	changes := Changes{InstanceName: in.InstanceName, Timezone: in.Timezone, ReminderDefaultTime: in.ReminderDefaultTime, Units: UnitsFromStrings(in.Units)}
+	changes := Changes{
+		InstanceName: in.InstanceName, Timezone: in.Timezone, ReminderDefaultTime: in.ReminderDefaultTime,
+		BackupEnabled: in.BackupEnabled, BackupTime: in.BackupTime, BackupKeep: in.BackupKeep,
+		Units: UnitsFromStrings(in.Units),
+	}
 	newMode := ""
 	if in.AuthMode != nil {
 		effective, err := s.Auth.EffectiveMode(ctx)
@@ -130,6 +141,9 @@ type Values struct {
 	InstanceName        string
 	Timezone            string
 	ReminderDefaultTime string
+	BackupEnabled       bool
+	BackupTime          string
+	BackupKeep          int
 	// Units maps each unit family that has a display unit to the chosen unit.
 	Units map[units.Family]units.Unit
 	// AuthMode is the mode stored in the database, which an environment override may shadow.
@@ -141,6 +155,9 @@ type Changes struct {
 	InstanceName        *string
 	Timezone            *string
 	ReminderDefaultTime *string
+	BackupEnabled       *bool
+	BackupTime          *string
+	BackupKeep          *int
 	Units               map[units.Family]units.Unit
 }
 
@@ -170,6 +187,15 @@ func (s *Store) GetValues(ctx context.Context) (Values, error) {
 	if v.ReminderDefaultTime, err = s.GetReminderDefaultTime(ctx); err != nil {
 		return Values{}, err
 	}
+	if v.BackupEnabled, err = s.GetBackupEnabled(ctx); err != nil {
+		return Values{}, err
+	}
+	if v.BackupTime, err = s.GetBackupTime(ctx); err != nil {
+		return Values{}, err
+	}
+	if v.BackupKeep, err = s.GetBackupKeep(ctx); err != nil {
+		return Values{}, err
+	}
 	if v.AuthMode, err = s.GetAuthMode(ctx); err != nil {
 		return Values{}, err
 	}
@@ -195,6 +221,12 @@ func (c Changes) Validate() error {
 	if c.ReminderDefaultTime != nil {
 		rejected = append(rejected, checkReminderTime(*c.ReminderDefaultTime))
 	}
+	if c.BackupTime != nil {
+		rejected = append(rejected, checkBackupTime(*c.BackupTime))
+	}
+	if c.BackupKeep != nil {
+		rejected = append(rejected, checkBackupKeep(*c.BackupKeep))
+	}
 	for family, unit := range c.Units {
 		_, err := checkUnit(family, unit)
 		rejected = append(rejected, err)
@@ -219,6 +251,21 @@ func (s *Store) Apply(ctx context.Context, c Changes) error {
 	}
 	if c.ReminderDefaultTime != nil {
 		if err := s.SetReminderDefaultTime(ctx, *c.ReminderDefaultTime); err != nil {
+			return err
+		}
+	}
+	if c.BackupEnabled != nil {
+		if err := s.SetBackupEnabled(ctx, *c.BackupEnabled); err != nil {
+			return err
+		}
+	}
+	if c.BackupTime != nil {
+		if err := s.SetBackupTime(ctx, *c.BackupTime); err != nil {
+			return err
+		}
+	}
+	if c.BackupKeep != nil {
+		if err := s.SetBackupKeep(ctx, *c.BackupKeep); err != nil {
 			return err
 		}
 	}

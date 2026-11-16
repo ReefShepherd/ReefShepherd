@@ -25,6 +25,9 @@ const (
 	keyAuthMode            = "auth_mode"
 	keyAuthDisabledUserID  = "auth_disabled_user_id"
 	keyReminderDefaultTime = "reminder_default_time"
+	keyBackupEnabled       = "backup_enabled"
+	keyBackupTime          = "backup_time"
+	keyBackupKeep          = "backup_keep"
 	// keyUnitPrefix plus a unit family gives the key of that family's display unit, such as unit_temperature.
 	keyUnitPrefix = "unit_"
 )
@@ -36,6 +39,13 @@ const (
 	DefaultAuthMode     = config.AuthModePassword
 	// DefaultReminderTime is the local time of day (HH:MM) when new reminders become due.
 	DefaultReminderTime = "09:00"
+	// DefaultBackupTime is the local time of day (HH:MM) of the scheduled backup.
+	DefaultBackupTime = "03:30"
+	// DefaultBackupKeep is how many scheduled backups are kept.
+	DefaultBackupKeep = 14
+	// MinBackupKeep and MaxBackupKeep bound how many scheduled backups can be kept.
+	MinBackupKeep = 1
+	MaxBackupKeep = 365
 )
 
 const reminderTimeLayout = "15:04"
@@ -45,8 +55,9 @@ var ErrInvalid = errors.New("invalid setting value")
 
 // Codes a rejected value reports, matching the API's field error codes.
 const (
-	codeRequired = "required"
-	codeInvalid  = "invalid"
+	codeRequired   = "required"
+	codeInvalid    = "invalid"
+	codeOutOfRange = "out_of_range"
 )
 
 // invalidError is a rejected setting value, with the API field and the code that says why.
@@ -241,8 +252,69 @@ func (s *Store) SetReminderDefaultTime(ctx context.Context, hhmm string) error {
 }
 
 func checkReminderTime(hhmm string) error {
+	return checkClock("reminder_default_time", hhmm)
+}
+
+// checkClock accepts a 24-hour HH:MM time of day and reports a rejection for field otherwise.
+func checkClock(field, hhmm string) error {
 	if t, err := time.Parse(reminderTimeLayout, hhmm); err != nil || t.Format(reminderTimeLayout) != hhmm {
-		return reject("reminder_default_time", codeInvalid, "reminder time %q is not HH:MM", hhmm)
+		return reject(field, codeInvalid, "%s %q is not HH:MM", field, hhmm)
+	}
+	return nil
+}
+
+// GetBackupEnabled reports whether the scheduled backup runs.
+func (s *Store) GetBackupEnabled(ctx context.Context) (bool, error) {
+	return getParsed(ctx, s, keyBackupEnabled, true, strconv.ParseBool)
+}
+
+// SetBackupEnabled records whether the scheduled backup runs.
+func (s *Store) SetBackupEnabled(ctx context.Context, enabled bool) error {
+	return s.set(ctx, keyBackupEnabled, strconv.FormatBool(enabled))
+}
+
+// GetBackupTime returns the local time of day (HH:MM) of the scheduled backup.
+func (s *Store) GetBackupTime(ctx context.Context) (string, error) {
+	return s.get(ctx, keyBackupTime, DefaultBackupTime)
+}
+
+// SetBackupTime stores the scheduled backup time as HH:MM on a 24-hour clock.
+func (s *Store) SetBackupTime(ctx context.Context, hhmm string) error {
+	if err := checkBackupTime(hhmm); err != nil {
+		return err
+	}
+	return s.set(ctx, keyBackupTime, hhmm)
+}
+
+func checkBackupTime(hhmm string) error {
+	return checkClock("backup_time", hhmm)
+}
+
+// GetBackupKeep returns how many scheduled backups are kept.
+func (s *Store) GetBackupKeep(ctx context.Context) (int, error) {
+	return getParsed(ctx, s, keyBackupKeep, DefaultBackupKeep, func(v string) (int, error) {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return 0, err
+		}
+		if err := checkBackupKeep(n); err != nil {
+			return 0, err
+		}
+		return n, nil
+	})
+}
+
+// SetBackupKeep stores how many scheduled backups are kept, from MinBackupKeep to MaxBackupKeep.
+func (s *Store) SetBackupKeep(ctx context.Context, n int) error {
+	if err := checkBackupKeep(n); err != nil {
+		return err
+	}
+	return s.set(ctx, keyBackupKeep, strconv.Itoa(n))
+}
+
+func checkBackupKeep(n int) error {
+	if n < MinBackupKeep || n > MaxBackupKeep {
+		return reject("backup_keep", codeOutOfRange, "backup keep %d is outside %d to %d", n, MinBackupKeep, MaxBackupKeep)
 	}
 	return nil
 }

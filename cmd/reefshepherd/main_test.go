@@ -36,11 +36,15 @@ func TestUsageAndUnknownCommand(t *testing.T) {
 	}
 }
 
-func TestStubSubcommands(t *testing.T) {
-	for _, cmd := range []string{"restore"} {
-		if code, _, errOut := runCmd(cmd); code != 1 || !strings.Contains(errOut, "not implemented") {
-			t.Errorf("%s: code=%d stderr=%q", cmd, code, errOut)
-		}
+func TestRestoreNeedsABackupFile(t *testing.T) {
+	if code, _, errOut := runCmd("restore"); code != 2 || !strings.Contains(errOut, "Usage: reefshepherd restore") {
+		t.Errorf("no file: code=%d stderr=%q", code, errOut)
+	}
+	if code, _, errOut := runCmd("restore", "--data-dir", "x"); code != 2 || !strings.Contains(errOut, "missing backup file") {
+		t.Errorf("flag first: code=%d stderr=%q", code, errOut)
+	}
+	if code, out, _ := runCmd("restore", "--help"); code != 0 || !strings.Contains(out, "Usage: reefshepherd restore") {
+		t.Errorf("help: code=%d out=%q", code, out)
 	}
 }
 

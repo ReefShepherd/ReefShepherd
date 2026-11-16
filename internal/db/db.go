@@ -25,8 +25,8 @@ var migrationFiles embed.FS
 const (
 	busyTimeoutMillis = 5000
 	readerConns       = 4
-	// backupTimeLayout is the UTC timestamp in backup file names.
-	backupTimeLayout = "20060102T150405Z"
+	// BackupTimeLayout is the UTC timestamp in backup file names.
+	BackupTimeLayout = "20060102T150405Z"
 )
 
 // DB is the two connection pools on one database file.
@@ -179,7 +179,7 @@ func (d *DB) migrate(ctx context.Context, fsys fs.FS, backupDir string, now time
 		if err := os.MkdirAll(backupDir, 0o750); err != nil {
 			return fmt.Errorf("create backup dir: %w", err)
 		}
-		name := fmt.Sprintf("reefshepherd-premigrate-%05d-%s.db", target, now.UTC().Format(backupTimeLayout))
+		name := fmt.Sprintf("reefshepherd-premigrate-%05d-%s.db", target, now.UTC().Format(BackupTimeLayout))
 		if err := d.BackupTo(ctx, filepath.Join(backupDir, name)); err != nil {
 			return fmt.Errorf("premigrate backup: %w", err)
 		}
@@ -249,19 +249,88 @@ func syncPath(path string) error {
 	return f.Close()
 }
 
+// ErrSchemaTooNew is returned for a database file whose schema is newer than this build supports.
+var ErrSchemaTooNew = errors.New("database schema is newer than this build supports")
+
 // checkCopy opens the copy on its own connection and runs SQLite's quick integrity check.
 func checkCopy(ctx context.Context, path string) error {
-	c, err := sql.Open("sqlite", fileURI(path)+"?mode=ro")
+	c, err := openReadOnly(path)
 	if err != nil {
 		return fmt.Errorf("open backup copy: %w", err)
 	}
 	defer c.Close()
-	var result string
-	if err := c.QueryRowContext(ctx, "PRAGMA quick_check").Scan(&result); err != nil {
+	if err := quickCheck(ctx, c); err != nil {
 		return fmt.Errorf("check backup copy: %w", err)
 	}
+	return nil
+}
+
+func openReadOnly(path string) (*sql.DB, error) {
+	return sql.Open("sqlite", fileURI(path)+"?mode=ro")
+}
+
+func quickCheck(ctx context.Context, c *sql.DB) error {
+	var result string
+	if err := c.QueryRowContext(ctx, "PRAGMA quick_check").Scan(&result); err != nil {
+		return err
+	}
 	if result != "ok" {
-		return fmt.Errorf("check backup copy: %s", result)
+		return errors.New(result)
+	}
+	return nil
+}
+
+// CheckFile verifies that path is an intact ReefShepherd database this build can read and returns its schema version; a newer schema is reported as ErrSchemaTooNew.
+func CheckFile(ctx context.Context, path string) (int64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	if !info.Mode().IsRegular() {
+		return 0, fmt.Errorf("%s is not a regular file", path)
+	}
+	c, err := openReadOnly(path)
+	if err != nil {
+		return 0, fmt.Errorf("open database file: %w", err)
+	}
+	defer c.Close()
+	if err := quickCheck(ctx, c); err != nil {
+		return 0, fmt.Errorf("integrity check failed: %w", err)
+	}
+	var version int64
+	if err := c.QueryRowContext(ctx, "SELECT COALESCE(MAX(version_id), 0) FROM goose_db_version WHERE is_applied = 1").Scan(&version); err != nil {
+		return 0, fmt.Errorf("read schema version: %w", err)
+	}
+	if version == 0 {
+		return 0, errors.New("the file has no ReefShepherd schema")
+	}
+	fsys, err := embeddedMigrations()
+	if err != nil {
+		return 0, err
+	}
+	p, err := goose.NewProvider(goose.DialectSQLite3, c, fsys)
+	if err != nil {
+		return 0, fmt.Errorf("load migrations: %w", err)
+	}
+	var supported int64
+	for _, src := range p.ListSources() {
+		supported = max(supported, src.Version)
+	}
+	if version > supported {
+		return version, fmt.Errorf("%w (file %d, build %d)", ErrSchemaTooNew, version, supported)
+	}
+	return version, nil
+}
+
+// Checkpoint folds the write-ahead log of the database file at path into the file itself, so the file can be moved or copied on its own.
+func Checkpoint(ctx context.Context, path string) error {
+	d, err := Open(path)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	if _, err := d.W.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		return fmt.Errorf("checkpoint: %w", err)
 	}
 	return nil
 }

@@ -149,8 +149,8 @@ func TestSettersRoundTrip(t *testing.T) {
 }
 
 func TestCodesAreOnTheAPIsClosedList(t *testing.T) {
-	if httpx.Code(codeRequired) != httpx.CodeRequired || httpx.Code(codeInvalid) != httpx.CodeInvalid {
-		t.Errorf("local codes %q and %q differ from the API's", codeRequired, codeInvalid)
+	if httpx.Code(codeRequired) != httpx.CodeRequired || httpx.Code(codeInvalid) != httpx.CodeInvalid || httpx.Code(codeOutOfRange) != httpx.CodeOutOfRange {
+		t.Errorf("local codes %q, %q and %q differ from the API's", codeRequired, codeInvalid, codeOutOfRange)
 	}
 }
 

@@ -1,0 +1,4 @@
+{
+  "backup_failed_title": "Backup failed",
+  "backup_failed_body": "The scheduled backup for %[1]s could not be written. Check the free disk space and the server log."
+}

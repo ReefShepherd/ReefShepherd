@@ -5,7 +5,9 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/reefshepherd/reefshepherd/internal/auth"
 	"github.com/reefshepherd/reefshepherd/internal/db"
+	"github.com/reefshepherd/reefshepherd/internal/httpx"
 	"github.com/reefshepherd/reefshepherd/internal/notify"
 	"github.com/reefshepherd/reefshepherd/internal/settings"
 )
@@ -21,5 +23,14 @@ type Deps struct {
 	Notify notify.Raiser
 }
 
-// Routes registers the backup endpoints behind the caller's sign-in check.
-func Routes(_ *http.ServeMux, _ Deps) {}
+// Routes registers the backup endpoints, which are for admins only; the caller wraps mux in the sign-in check.
+func Routes(mux *http.ServeMux, deps Deps) {
+	svc := NewService(deps)
+	admin := func(h httpx.HandlerFunc) http.Handler {
+		return auth.RequireAdmin(httpx.Handle(svc.Logger, h, apiError))
+	}
+	mux.Handle("GET /api/v1/backups", admin(svc.listBackups))
+	mux.Handle("POST /api/v1/backups", admin(svc.createBackup))
+	mux.Handle("GET /api/v1/backups/{name}/download", admin(svc.downloadBackup))
+	mux.Handle("DELETE /api/v1/backups/{name}", admin(svc.deleteBackup))
+}
